@@ -357,6 +357,21 @@
 - name: pii token in projection
   sql: "SELECT '{{TOKEN_OWN}}' FROM users"
   reason: a token outside a protected predicate is rejected
+- name: pii parenthesized projection under alias
+  sql: "SELECT (email) AS e FROM users"
+  reason: an aliased expression must not hide a protected column from lineage
+- name: pii equality projected under alias
+  sql: "SELECT (email = 'x') AS hit FROM users"
+  reason: MySQL evaluates the comparison to 0/1 per row, an equality oracle
+- name: pii range projected under alias
+  sql: "SELECT (email > 'm') AS x FROM users"
+  reason: MySQL evaluates the comparison to 0/1 per row, a range oracle
+- name: pii in list projected under alias
+  sql: "SELECT (email IN ('a', 'b')) AS x FROM users"
+  reason: a projected membership test is an oracle on a protected column
+- name: pii is null projected under alias
+  sql: "SELECT (email IS NULL) AS x FROM users"
+  reason: a projected null test is an oracle on a protected column
 - name: pii token against plain column
   sql: "SELECT id FROM users WHERE name = '{{TOKEN_OWN}}'"
   reason: tokens are only valid against protected columns

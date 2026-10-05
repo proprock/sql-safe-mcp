@@ -80,6 +80,10 @@ _ALLOWED_ARGS: dict[type[exp.Expr], frozenset[str]] = {
     **{comparison: frozenset({"this", "expression"}) for comparison in _COMPARISONS},
 }
 _PLACEHOLDER_ARGS = frozenset({"this"})
+# What an alias may name: a direct column, a literal, or COUNT(*). Anything else (a Paren, a
+# comparison, ...) would be invisible to lineage and could project a protected column in clear.
+# A Star under an alias is still rejected by the Star branch below with its own reason.
+_ALIASED = (exp.Column, exp.Star, exp.Literal, exp.Null, exp.Neg, exp.Count)
 _PROJECTIONS = (exp.Column, exp.Star, exp.Literal, exp.Null, exp.Neg, exp.Alias, exp.Count)
 
 
@@ -110,6 +114,9 @@ def _check_node(node: exp.Expr, allow_placeholders: bool) -> None:
     elif isinstance(node, exp.Column):
         if not isinstance(node.this, (exp.Identifier, exp.Star)):
             raise reject(Reason.COLUMN_REFERENCE_UNSUPPORTED)
+    elif isinstance(node, exp.Alias):
+        if not isinstance(node.this, _ALIASED):
+            raise reject(Reason.PROJECTION_UNSUPPORTED)
     elif isinstance(node, exp.Count):
         if not isinstance(node.this, exp.Star):
             raise reject(Reason.COUNT_STAR_ONLY)

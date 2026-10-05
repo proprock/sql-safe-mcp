@@ -382,6 +382,36 @@ def test_a_parenthesized_projection_is_rejected() -> None:
     _rejected_with(query, Reason.PROJECTION_UNSUPPORTED)
 
 
+def test_an_aliased_parenthesized_projection_is_rejected() -> None:
+    query = exp.Select(
+        expressions=[exp.Alias(this=exp.Paren(this=exp.column("Email")), alias="e")]
+    ).from_("Users")
+    _rejected_with(query, Reason.PROJECTION_UNSUPPORTED)
+
+
+def test_an_aliased_comparison_projection_is_rejected() -> None:
+    query = exp.Select(
+        expressions=[
+            exp.Alias(
+                this=exp.EQ(this=exp.column("Email"), expression=exp.Literal.string("x")),
+                alias="hit",
+            )
+        ]
+    ).from_("Users")
+    _rejected_with(query, Reason.PROJECTION_UNSUPPORTED)
+
+
+def test_lineage_refuses_an_aliased_expression_even_if_the_allowlist_let_it_through() -> None:
+    # Defense in depth: the lineage stage must not label an untraceable projection "literal".
+    query = exp.Select(
+        expressions=[exp.Alias(this=exp.Paren(this=exp.column("Email")), alias="e")]
+    ).from_(exp.to_table("Users"))
+    schemas = resolve_tables(query, Catalog())
+    with pytest.raises(DomainError) as info:
+        analyze_query(query, schemas, LIMITS, SQLSERVER)
+    assert info.value.public_message == f"Query rejected: {Reason.PROJECTION_UNSUPPORTED.value}."
+
+
 def test_a_projection_without_a_from_clause_is_accepted() -> None:
     assert validate("SELECT 1, 'x', NULL").sql.startswith("SELECT TOP ")
 

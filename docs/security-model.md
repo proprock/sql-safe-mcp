@@ -32,7 +32,7 @@ killed.
 
 `execute_sql` is verified by layered evidence, all described in [checks.md](checks.md):
 
-- an adversarial corpus of 292 hostile statements (`tests/security/corpus`) that must fail with
+- an adversarial corpus of 300 hostile statements (`tests/security/corpus`) that must fail with
   their expected code without reaching the database;
 - Hypothesis properties (`security-fast` on every milestone/release security gate,
   `security-deep` before a milestone merge)

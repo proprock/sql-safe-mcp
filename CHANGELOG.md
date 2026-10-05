@@ -7,6 +7,16 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-10-05
+
+### Security
+
+- `execute_sql` now rejects a projection whose alias names anything other than a direct column,
+  a literal, or `COUNT(*)`, such as `SELECT (Email) AS e FROM Users`. Before, the expression was
+  classified as a literal, so a protected column wrapped in parentheses was returned in clear,
+  and on MySQL/MariaDB a projected comparison such as `(Email > 'm') AS x` acted as an oracle on
+  the protected value. The lineage stage also fails closed on any untraceable projection.
+
 ## [1.5.1] - 2026-09-23
 
 ### Fixed

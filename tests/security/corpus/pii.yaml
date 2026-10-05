@@ -131,6 +131,30 @@
 - name: parenthesized projection
   sql: "SELECT (Email) FROM Users"
   reason: only direct projections
+- name: parenthesized projection under alias
+  sql: "SELECT (Email) AS e FROM Users"
+  reason: an aliased expression must not hide a protected column from lineage
+- name: doubly parenthesized projection under alias
+  sql: "SELECT ((Email)) AS e FROM Users"
+  reason: nesting must not hide a protected column from lineage
+- name: parenthesized plain column under alias
+  sql: "SELECT (Id) AS i FROM Users"
+  reason: only direct projections, protected or not
+- name: equality expression projected under alias
+  sql: "SELECT (Email = 'x') AS hit FROM Users"
+  reason: a projected comparison is an equality oracle on a protected column
+- name: range expression projected under alias
+  sql: "SELECT (Email > 'm') AS x FROM Users"
+  reason: a projected comparison is a range oracle on a protected column
+- name: in list projected under alias
+  sql: "SELECT (Email IN ('a', 'b')) AS x FROM Users"
+  reason: a projected membership test is an oracle on a protected column
+- name: is null projected under alias
+  sql: "SELECT (Email IS NULL) AS x FROM Users"
+  reason: a projected null test is an oracle on a protected column
+- name: token comparison projected under alias
+  sql: "SELECT (Email = '{{TOKEN_OWN}}') AS hit FROM Users"
+  reason: tokens are accepted only in WHERE predicates
 - name: negated protected column
   sql: "SELECT -Phone FROM Users"
   reason: arithmetic on protected column
