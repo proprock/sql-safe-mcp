@@ -7,6 +7,8 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-10-05
+
 ### Security
 
 - `execute_sql` now rejects a projection whose alias names anything other than a direct column,

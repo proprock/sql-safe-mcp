@@ -95,7 +95,7 @@ or
 pip install sql-safe-mcp
 ```
 
-Pin a version when you want a fixed surface: `uvx sql-safe-mcp==1.5.1`.
+Pin a version when you want a fixed surface: `uvx sql-safe-mcp==1.5.2`.
 
 Requires Python 3.12–3.14, [uv](https://docs.astral.sh/uv/) (or `pip`), and
 [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server)

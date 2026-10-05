@@ -1,6 +1,6 @@
 [project]
 name = "sql-safe-mcp"
-version = "1.5.1"
+version = "1.5.2"
 description = "Minimal, read-only, PII-safe MCP server for SQL databases."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

@@ -8,8 +8,8 @@ from sql_safe_mcp.mcp_server import create_server
 
 
 def test_distribution_and_runtime_versions_match_release() -> None:
-    assert __version__ == "1.5.1"
-    assert version("sql-safe-mcp") == "1.5.1"
+    assert __version__ == "1.5.2"
+    assert version("sql-safe-mcp") == "1.5.2"
 
 
 def test_mcp_server_version_uses_the_runtime_version() -> None:
