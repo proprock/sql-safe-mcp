@@ -142,8 +142,11 @@ def _analyze_projections(
             outputs.append(OutputColumn(alias or canonical, "column", source, binding.name))
         elif isinstance(value, exp.Count):
             outputs.append(OutputColumn(alias or f"column_{index}", "count", None))
-        else:
+        elif isinstance(value, exp.Literal | exp.Null | exp.Neg):
             outputs.append(OutputColumn(alias or f"column_{index}", "literal", None))
+        else:
+            # Fail closed: a projection whose source cannot be traced is never a "literal".
+            raise reject(Reason.PROJECTION_UNSUPPORTED)
     return outputs
 
 
