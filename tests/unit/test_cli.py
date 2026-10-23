@@ -6,6 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+import sql_safe_mcp.__main__ as cli
+from sql_safe_mcp.pii_audit import Catalog, CatalogError
+
 
 def _write_config(path: Path, *, extra: str = "") -> Path:
     path.write_text(
@@ -116,3 +121,111 @@ servers:
     assert "[CONFIG_ERROR]" in result.stderr
     assert "Traceback" not in result.stderr
     assert secret not in result.stderr
+
+
+_PII_CONFIG = """
+version: 1
+servers:
+  clinic:
+    engine: mysql
+    access_level: all_pii_safe
+    connection_url: mysql+pymysql://user:cli-pass-marker@host/clinic
+    pii_key_env: CLINIC_KEY
+    pii:
+      rules:
+        - {{database: clinic, table: patients, columns: [{column}]}}
+"""
+
+
+def _run_verify(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    *,
+    column: str,
+    strict: bool,
+    catalog: Catalog,
+) -> tuple[int, str]:
+    config = tmp_path / "pii.yaml"
+    config.write_text(_PII_CONFIG.format(column=column), encoding="utf-8")
+    monkeypatch.setenv("CLINIC_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setattr(cli, "collect_catalog", lambda _config, _alias: catalog)
+    argv = ["sql_safe_mcp", "--config", str(config), "--verify-pii-rules"]
+    monkeypatch.setattr(sys, "argv", [*argv, *(["--strict"] if strict else [])])
+    code = 0
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        code = int(exit_.code or 0)
+    return code, capsys.readouterr().err
+
+
+_CATALOG: Catalog = {"clinic": [(None, "patients", ("id", "email", "Emial", "visit_notes"))]}
+
+
+def test_verify_pii_rules_warns_about_unmatched_rule_and_fails_when_strict(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, err = _run_verify(
+        monkeypatch, capsys, tmp_path, column="emial2", strict=True, catalog=_CATALOG
+    )
+
+    assert code == 2
+    assert "WARNING: clinic: rule clinic.patients(emial2) matches no table or column" in err
+
+
+def test_verify_pii_rules_unmatched_rule_passes_without_strict(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, err = _run_verify(
+        monkeypatch, capsys, tmp_path, column="emial2", strict=False, catalog=_CATALOG
+    )
+
+    assert code == 0
+    assert "matches no table or column" in err
+
+
+def test_verify_pii_rules_matching_rule_returns_zero_and_advises_on_open_columns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, err = _run_verify(
+        monkeypatch, capsys, tmp_path, column="email", strict=True, catalog=_CATALOG
+    )
+
+    assert code == 0
+    assert "rule clinic.patients(email) matched 1 table(s), 1 column(s)" in err
+    assert "unprotected column looks personal: clinic.patients.visit_notes" in err
+    # The advisor is a fixed dictionary: it does not catch the misspelled "Emial".
+    assert "clinic.patients.Emial" not in err
+    assert "clinic.patients.email" not in err
+    assert "cli-pass-marker" not in err
+
+
+def test_verify_pii_rules_connection_failure_returns_two_without_secret(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    def fail(_config: object, _alias: str) -> object:
+        raise CatalogError("cannot reflect database 'clinic': OperationalError code=2003")
+
+    config = tmp_path / "pii.yaml"
+    config.write_text(_PII_CONFIG.format(column="email"), encoding="utf-8")
+    monkeypatch.setenv("CLINIC_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setattr(cli, "collect_catalog", fail)
+    monkeypatch.setattr(
+        sys, "argv", ["sql_safe_mcp", "--config", str(config), "--verify-pii-rules"]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+
+    err = capsys.readouterr().err
+    assert raised.value.code == 2
+    assert "ERROR: clinic: cannot reflect database" in err
+    assert "cli-pass-marker" not in err
+
+
+def test_strict_requires_verify_pii_rules() -> None:
+    result = _run("--strict")
+
+    assert result.returncode == 2
+    assert "--strict requires --verify-pii-rules" in result.stderr

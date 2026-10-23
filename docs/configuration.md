@@ -48,6 +48,29 @@ sql-safe-mcp --check-config
 
 Errors name the missing or invalid setting without printing a URL, key, or secret.
 
+## Verifying PII rules against the real schema
+
+A misspelled table or column in a PII rule silently protects nothing. Before starting the server,
+check the rules against the live databases:
+
+```bash
+sql-safe-mcp --verify-pii-rules
+sql-safe-mcp --verify-pii-rules --strict
+```
+
+For every `all_pii_safe` alias the command connects to each database named in its rules (to every
+visible database for `"*"`), reflects tables and columns, and prints to stderr, per rule, how many
+tables and columns it matched. A rule that matches nothing prints `WARNING`; with `--strict` the
+command then exits 2. A database that cannot be reached or reflected prints `ERROR` and exits 2
+with or without `--strict`. Only object names are printed, never URLs, keys, or rows.
+
+The command also prints `WARNING: unprotected column looks personal` for every column no rule
+protects whose name contains one of: `email`, `phone`, `mobile`, `ssn`, `passport`, `dob`,
+`birth`, `address`, `zip`, `postal`, `name`, `diagnos`, `icd`, `mrn`, `guardian`, `ip_`, `device`,
+`photo`, `notes`. This list is fixed and name-based: it misses misspelled or opaque names, flags
+harmless ones, and never changes the exit code. It is a hint, not a guarantee that no personal
+data is exposed.
+
 ## Top-level keys
 
 | Key | Meaning |

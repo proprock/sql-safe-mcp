@@ -7,6 +7,12 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+### Added
+
+- `sql-safe-mcp --verify-pii-rules [--strict]` connects to each `all_pii_safe` alias, reports how
+  many tables and columns every PII rule matches, and warns about rules that match nothing
+  (exit 2 with `--strict`) and about unprotected columns whose names look personal.
+
 ### Security
 
 - `execute_sql` now allows each SQL construct only in the positions the supported subset uses.

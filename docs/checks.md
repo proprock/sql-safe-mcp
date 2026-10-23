@@ -68,6 +68,12 @@ make config-check CONFIG=sql-safe-mcp.example-simple.yaml
 uv run sql-safe-mcp --config sql-safe-mcp.example-simple.yaml --check-config
 ```
 
+Check PII rules against live databases (connects; see `docs/configuration.md`):
+
+```bash
+uv run sql-safe-mcp --config sql-safe-mcp.yaml --verify-pii-rules --strict
+```
+
 ## Milestone/release security gate
 
 Per-task work runs the fast suite. A milestone is not closed, marked accepted in the roadmap, or

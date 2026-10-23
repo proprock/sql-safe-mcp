@@ -10,6 +10,7 @@ from pathlib import Path
 from sql_safe_mcp.config import load_config
 from sql_safe_mcp.errors import DomainError
 from sql_safe_mcp.mcp_server import create_server
+from sql_safe_mcp.pii_audit import collect_catalog, verify_pii_rules
 
 
 def _positive_int(value: str) -> int:
@@ -41,11 +42,24 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Print N base64-encoded 32-byte PII keys (default: 1) and exit.",
     )
+    actions.add_argument(
+        "--verify-pii-rules",
+        action="store_true",
+        help="Connect to each all_pii_safe alias and report PII rules that match nothing.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="With --verify-pii-rules, exit 2 when any rule matches nothing.",
+    )
     return parser
 
 
 def main() -> None:
-    args = _parser().parse_args()
+    parser = _parser()
+    args = parser.parse_args()
+    if args.strict and not args.verify_pii_rules:
+        parser.error("--strict requires --verify-pii-rules")
     if args.gen_pii_key is not None:
         for _ in range(args.gen_pii_key):
             print(base64.b64encode(secrets.token_bytes(32)).decode("ascii"))
@@ -57,6 +71,12 @@ def main() -> None:
         raise SystemExit(2) from None
     if args.check_config:
         print(f"Configuration valid: {len(config.servers)} server alias(es).")
+        return
+    if args.verify_pii_rules:
+        report = verify_pii_rules(config, collect_catalog)
+        print("\n".join(report.lines), file=sys.stderr)
+        if report.errors or (args.strict and report.unmatched_rules):
+            raise SystemExit(2)
         return
     create_server(config).run("stdio")
 
