@@ -9,6 +9,10 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- `execute_sql` now allows each SQL construct only in the positions the supported subset uses.
+  A bare column or literal used as a condition (`WHERE a`, `ON 1`, `WHERE a AND b = 1`) and any
+  other node in an unlisted position is rejected with `QUERY_REJECTED` before the database runs
+  the query.
 - `execute_sql` now checks a PII token against the type of the protected column it is compared
   with. A string token compared with an integer or decimal column, or any token compared with a
   column of an unrecognised type, is rejected with `QUERY_REJECTED` before the database runs the

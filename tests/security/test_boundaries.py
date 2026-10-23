@@ -495,12 +495,13 @@ def test_a_none_schema_from_reflection_becomes_an_empty_schema(
 
 
 def test_a_bare_protected_column_used_as_a_predicate_is_rejected() -> None:
-    rules = [PiiRule(database="*", schema="dbo", table="Users", columns=["Name"])]
-    query = parse_select("SELECT Id FROM Users WHERE Name", LIMITS)
-    result = analyze_query(query, resolve_tables(query, Catalog()), LIMITS, SQLSERVER)
+    # The position allowlist now rejects a bare column predicate before the policy sees it.
     with pytest.raises(DomainError) as info:
-        PiiPolicy("app", PiiConfig(rules=rules), OWN).evaluate(result)
-    assert info.value.public_message == f"Query rejected: {Reason.PROTECTED_POSITION.value}."
+        parse_select("SELECT Id FROM Users WHERE Name", LIMITS)
+    assert (
+        info.value.public_message
+        == f"Query rejected: {Reason.NODE_UNSUPPORTED.value}: Column in Where."
+    )
 
 
 def test_a_protected_column_inside_an_in_list_is_not_a_token_comparison() -> None:

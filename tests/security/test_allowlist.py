@@ -6,6 +6,8 @@ from sql_safe_mcp.security.parser import ParserLimits, parse_select, validate_al
 
 LIMITS = ParserLimits(max_sql_chars=4096, max_ast_nodes=500, max_joins=4, max_in_list_items=10)
 
+COMPARATORS = ("=", "<>", "!=", "<", "<=", ">", ">=")
+
 ALLOWED = {
     "columns": "SELECT a, b FROM dbo.t",
     "qualified column": "SELECT t.a FROM dbo.t AS t",
@@ -26,6 +28,26 @@ ALLOWED = {
     "is null": "SELECT a FROM t WHERE a IS NULL",
     "order by column": "SELECT a FROM t ORDER BY a DESC, t.b",
     "table alias": "SELECT x.a FROM t x",
+    "join on and": "SELECT a FROM t JOIN u ON t.id = u.id AND t.b IS NULL",
+    "join on or": "SELECT a FROM t JOIN u ON t.id = u.id OR t.b IN (1)",
+    "join on paren": "SELECT a FROM t JOIN u ON (t.id = u.id)",
+    "join on is null": "SELECT a FROM t JOIN u ON t.id IS NULL",
+    "join on in": "SELECT a FROM t JOIN u ON t.id IN (1, 2)",
+    "double parentheses": "SELECT a FROM t WHERE ((a = 1))",
+    "nested predicates": (
+        "SELECT a FROM t WHERE (a = 1 AND (b IS NULL OR c IN (1))) OR (d = 1 AND e IS NULL) "
+        "AND (f = 2 OR (g = 3)) AND h IN (1) AND i IS NULL"
+    ),
+    "nested join predicates": (
+        "SELECT a FROM t JOIN u ON ((t.id = u.id AND t.b IS NULL) OR (t.c IN (1) AND t.d = 2)) "
+        "AND (t.e = 1 OR u.f IS NULL)"
+    ),
+    **{
+        f"predicate chain {op}": f"SELECT a FROM t WHERE a {op} 1 AND b {op} 2 OR (c {op} 3)"
+        for op in COMPARATORS
+    },
+    **{f"join on {op}": f"SELECT a FROM t JOIN u ON t.id {op} 1" for op in COMPARATORS},
+    **{f"negative operand {op}": f"SELECT a FROM t WHERE a {op} -1" for op in COMPARATORS},
 }
 
 REJECTED = {
@@ -108,6 +130,14 @@ REJECTED = {
     "compare star": "SELECT a FROM t WHERE * = 1",
     "bracketed temp table": "SELECT a FROM [#t]",
     "bracketed table variable": "SELECT a FROM [@t]",
+    "column as predicate": "SELECT a FROM t WHERE a",
+    "column inside and": "SELECT a FROM t WHERE a AND b = 1",
+    "column inside parentheses": "SELECT a FROM t WHERE (a)",
+    "column as join condition": "SELECT a FROM t JOIN u ON a",
+    "literal as predicate": "SELECT a FROM t WHERE 1",
+    "null as predicate": "SELECT a FROM t WHERE NULL",
+    "null compared": "SELECT a FROM t WHERE NULL = a",
+    "literal is null": "SELECT a FROM t WHERE 1 IS NULL",
 }
 
 

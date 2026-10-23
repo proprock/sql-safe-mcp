@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import property_checks as checks
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlglot import exp
-from support import Spec, specs
+from support import RUNTIME, Spec, render, specs
+from test_allowlist import ALLOWED
 
 from sql_safe_mcp.errors import DomainError, ErrorCode
-from sql_safe_mcp.security.parser import _ALLOWED_ARGS, validate_allowlist
+from sql_safe_mcp.security.parser import (
+    _ALLOWED_ARGS,
+    ParserLimits,
+    parse_select,
+    validate_allowlist,
+)
 
+LIMITS = ParserLimits.from_runtime(RUNTIME)
 SEEDS = st.integers(0, 2**32 - 1)
 ALIAS_NAMES = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789._-", min_size=1, max_size=12)
 SQL_FRAGMENTS = st.lists(
@@ -125,6 +132,63 @@ def test_arbitrary_token_input_only_raises_the_public_error(text: str) -> None:
 )
 def test_sql_looking_values_stay_binds(value: str) -> None:
     checks.check_sql_looking_values_stay_binds(value)
+
+
+ALLOWED_KINDS = sorted(_ALLOWED_ARGS, key=lambda cls: cls.__name__)
+
+
+@pytest.mark.parametrize("parent", ALLOWED_KINDS, ids=lambda cls: cls.__name__)
+def test_every_allowed_node_is_rejected_in_an_unlisted_position(parent: type[exp.Expr]) -> None:
+    for kind in ALLOWED_KINDS:
+        checks.check_node_position_is_allowlisted(kind, parent)
+
+
+def _observed_parent_pairs(sqls: list[str]) -> set[tuple[type[exp.Expr], type[exp.Expr]]]:
+    pairs = set()
+    for sql in sqls:
+        for node in parse_select(sql, LIMITS).walk():
+            if node.parent is not None:
+                pairs.add((type(node), type(node.parent)))
+    return pairs
+
+
+def test_parent_table_is_exactly_what_accepted_queries_use() -> None:
+    sqls = list(ALLOWED.values())
+    examples = 0
+
+    @settings(max_examples=500, deadline=None, derandomize=True)
+    @given(specs(), SEEDS)
+    def collect(spec: Spec, seed: int) -> None:
+        nonlocal examples
+        examples += 1
+        sqls.append(render(spec, seed))
+
+    collect()
+    assert examples >= 500
+    observed = _observed_parent_pairs(sqls)
+    assert observed == checks.allowed_parent_pairs()
+
+
+@pytest.mark.parametrize("parent", ALLOWED_KINDS, ids=lambda cls: cls.__name__)
+def test_placeholders_are_accepted_only_as_comparison_and_in_operands(
+    parent: type[exp.Expr],
+) -> None:
+    listed = parent in {exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.In}
+    for slot in ("this", "expression", "expressions"):
+        if slot not in _ALLOWED_ARGS[parent]:
+            continue
+        holder = checks.instance(parent)
+        holder.set(
+            slot,
+            [exp.Placeholder(this="p")] if slot == "expressions" else exp.Placeholder(this="p"),
+        )
+        for query in checks._placements(holder):
+            try:
+                validate_allowlist(query, allow_placeholders=True)
+            except DomainError as error:
+                assert error.code is ErrorCode.QUERY_REJECTED
+            else:
+                assert listed, f"Placeholder accepted in {parent.__name__}.{slot}"
 
 
 def _all_expression_classes() -> list[type[exp.Expr]]:

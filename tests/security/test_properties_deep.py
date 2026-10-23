@@ -10,11 +10,18 @@ import property_checks as checks
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from sqlglot import exp
 from support import Spec, specs
-from test_properties import ALIAS_NAMES, SEEDS, SQL_FRAGMENTS
+from test_properties import ALIAS_NAMES, ALLOWED_KINDS, SEEDS, SQL_FRAGMENTS
 
 pytestmark = pytest.mark.deep
 DEEP = settings.get_profile("security-deep")
+
+
+@settings(DEEP)
+@given(st.sampled_from(ALLOWED_KINDS), st.sampled_from(ALLOWED_KINDS))
+def test_deep_node_position_is_allowlisted(kind: type[exp.Expr], parent: type[exp.Expr]) -> None:
+    checks.check_node_position_is_allowlisted(kind, parent)
 
 
 @settings(DEEP)
