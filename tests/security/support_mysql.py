@@ -16,11 +16,13 @@ from support import (
     SpyConnection,
     _SpyRegistry,
 )
+from typed_columns import typed
 
 from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.security.dialect import MYSQL
 from sql_safe_mcp.security.pipeline import validate_sql
+from sql_safe_mcp.security.schema import ColumnSchema
 from sql_safe_mcp.security.validated_query import ValidatedQuery
 from sql_safe_mcp.service import DatabaseService
 
@@ -44,9 +46,9 @@ class MysqlCatalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return [("", name) for name in self.tables]
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
         assert schema == ""
-        return self.tables[table]
+        return typed(self.tables[table])
 
 
 def mysql_config(engine: str = "mysql") -> AppConfig:

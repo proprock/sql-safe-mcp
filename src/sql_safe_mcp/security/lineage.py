@@ -16,7 +16,7 @@ from sql_safe_mcp.security.parser import (
     validate_allowlist,
 )
 from sql_safe_mcp.security.reasons import Reason
-from sql_safe_mcp.security.schema import TableSchema
+from sql_safe_mcp.security.schema import ColumnSchema, TableSchema, TypeClass
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +24,7 @@ class SourceColumn:
     schema: str
     table: str
     column: str
+    type_class: TypeClass = "other"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,12 +77,14 @@ def _collect(query: exp.Select, schemas: Sequence[TableSchema]) -> list[_Binding
     return bindings
 
 
-def _canonical_column(binding: _Binding, name: str) -> str | None:
-    matches = [column for column in binding.table.columns if column.casefold() == name.casefold()]
+def _canonical_column(binding: _Binding, name: str) -> ColumnSchema | None:
+    matches = [
+        column for column in binding.table.columns if column.name.casefold() == name.casefold()
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
-def _resolve(column: exp.Column, bindings: Sequence[_Binding]) -> tuple[_Binding, str]:
+def _resolve(column: exp.Column, bindings: Sequence[_Binding]) -> tuple[_Binding, ColumnSchema]:
     name = column.name
     qualifier = column.table
     if qualifier:
@@ -102,10 +105,12 @@ def _resolve(column: exp.Column, bindings: Sequence[_Binding]) -> tuple[_Binding
     return candidates[0]
 
 
-def _rewrite(column: exp.Column, binding: _Binding, canonical: str) -> SourceColumn:
-    column.set("this", _identifier(canonical))
+def _rewrite(column: exp.Column, binding: _Binding, canonical: ColumnSchema) -> SourceColumn:
+    column.set("this", _identifier(canonical.name))
     column.set("table", _identifier(binding.name))
-    return SourceColumn(binding.table.schema, binding.table.name, canonical)
+    return SourceColumn(
+        binding.table.schema, binding.table.name, canonical.name, canonical.type_class
+    )
 
 
 def _expand_stars(query: exp.Select, bindings: Sequence[_Binding]) -> None:
@@ -121,9 +126,9 @@ def _expand_stars(query: exp.Select, bindings: Sequence[_Binding]) -> None:
             expanded.append(projection)
             continue
         expanded.extend(
-            exp.Column(this=_identifier(name), table=_identifier(binding.name))
+            exp.Column(this=_identifier(column.name), table=_identifier(binding.name))
             for binding in chosen
-            for name in binding.table.columns
+            for column in binding.table.columns
         )
     query.set("expressions", expanded)
 
@@ -139,7 +144,7 @@ def _analyze_projections(
             binding, canonical = _resolve(value, bindings)
             source = _rewrite(value, binding, canonical)
             refs.append(ColumnRef(value, source))
-            outputs.append(OutputColumn(alias or canonical, "column", source, binding.name))
+            outputs.append(OutputColumn(alias or canonical.name, "column", source, binding.name))
         elif isinstance(value, exp.Count):
             outputs.append(OutputColumn(alias or f"column_{index}", "count", None))
         elif isinstance(value, exp.Literal | exp.Null | exp.Neg):
@@ -165,7 +170,7 @@ def _resolve_order_column(
                 raise reject(Reason.ORDER_OUTPUT_AMBIGUOUS)
             source = matches[0].source
             binding = next(b for b in bindings if b.name == matches[0].binding)
-            return _rewrite(column, binding, source.column)
+            return _rewrite(column, binding, ColumnSchema(source.column, source.type_class))
     binding, canonical = _resolve(column, bindings)
     return _rewrite(column, binding, canonical)
 
@@ -173,7 +178,7 @@ def _resolve_order_column(
 def _cross_check(query: exp.Select, schemas: Sequence[TableSchema], dialect: SqlDialect) -> None:
     catalog: dict[str, dict] = {}
     for table in schemas:
-        columns = dict.fromkeys(table.columns, "varchar")
+        columns = dict.fromkeys((column.name for column in table.columns), "varchar")
         if dialect.has_schema:
             catalog.setdefault(table.schema, {})[table.name] = columns
         else:

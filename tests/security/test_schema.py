@@ -3,14 +3,17 @@ from collections.abc import Mapping, Sequence
 import pytest
 import sqlalchemy as sa
 from sqlglot import exp
+from typed_columns import typed
 
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.parser import ParserLimits, parse_select
 from sql_safe_mcp.security.schema import (
+    ColumnSchema,
     ReflectedCatalog,
     SchemaCache,
     TableSchema,
     resolve_tables,
+    type_class,
 )
 
 LIMITS = ParserLimits(4096, 500, 4, 10)
@@ -24,9 +27,9 @@ class FakeCatalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self._tables)
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
         self.column_lookups.append((schema, table))
-        return self._tables[(schema, table)]
+        return typed(self._tables[(schema, table)])
 
 
 CATALOG = {
@@ -53,7 +56,7 @@ def rejected(sql: str) -> DomainError:
 
 def test_resolves_qualified_table_case_insensitively() -> None:
     _, tables, _ = resolve("SELECT * FROM DBO.users")
-    assert tables == (TableSchema("dbo", "Users", ("Id", "Email")),)
+    assert tables == (TableSchema("dbo", "Users", tuple(typed(["Id", "Email"]))),)
 
 
 def test_unqualified_table_with_single_match() -> None:
@@ -67,7 +70,7 @@ def test_unqualified_ambiguous_table_is_rejected() -> None:
 
 def test_qualified_ambiguity_is_resolved_by_schema() -> None:
     _, tables, _ = resolve("SELECT * FROM sales.orders")
-    assert tables[0] == TableSchema("sales", "Orders", ("Id", "Total"))
+    assert tables[0] == TableSchema("sales", "Orders", tuple(typed(["Id", "Total"])))
 
 
 def test_case_variants_that_collide_are_rejected() -> None:
@@ -151,7 +154,10 @@ def sqlite_connection():
 def test_reflected_catalog_lists_base_tables_and_columns(sqlite_connection) -> None:
     catalog = ReflectedCatalog(sqlite_connection, SchemaCache(8, 60), "srv", "db")
     assert catalog.list_tables() == [("main", "Users")]
-    assert list(catalog.columns("main", "Users")) == ["Id", "Email"]
+    assert list(catalog.columns("main", "Users")) == [
+        ColumnSchema("Id", "integer"),
+        ColumnSchema("Email", "string"),
+    ]
 
 
 def test_reflected_catalog_uses_cache_and_isolates_scopes(sqlite_connection) -> None:
@@ -171,3 +177,27 @@ def test_missing_table_columns_are_rejected(sqlite_connection) -> None:
     with pytest.raises(DomainError) as info:
         catalog.columns("main", "Gone")
     assert info.value.code is ErrorCode.QUERY_REJECTED
+
+
+@pytest.mark.parametrize(
+    ("column_type", "expected"),
+    [
+        (sa.String(10), "string"),
+        (sa.Text(), "string"),
+        (sa.Integer(), "integer"),
+        (sa.BigInteger(), "integer"),
+        (sa.Float(), "float"),
+        (sa.Numeric(12, 2), "decimal"),
+        (sa.Boolean(), "bool"),
+        (sa.Date(), "date"),
+        (sa.Time(), "time"),
+        (sa.DateTime(), "datetime"),
+        (sa.Uuid(), "uuid"),
+        (sa.LargeBinary(), "binary"),
+        (sa.JSON(), "other"),
+        (sa.types.NullType(), "other"),
+        (None, "other"),
+    ],
+)
+def test_reflected_types_map_to_token_classes(column_type: object, expected: str) -> None:
+    assert type_class(column_type) == expected

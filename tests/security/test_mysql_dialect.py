@@ -8,13 +8,14 @@ from typing import Any, ClassVar
 import pytest
 import sqlglot
 from support import ALIAS, DATABASE, OWN, RUNTIME
+from typed_columns import typed
 
 from sql_safe_mcp.config import PiiConfig, PiiRule
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.dialect import MYSQL, SQLSERVER, dialect_for
 from sql_safe_mcp.security.lineage import _cross_check
 from sql_safe_mcp.security.pipeline import validate_sql
-from sql_safe_mcp.security.schema import TableSchema
+from sql_safe_mcp.security.schema import ColumnSchema, TableSchema
 from sql_safe_mcp.security.validated_query import ValidatedQuery
 
 MYSQL_PII = PiiConfig(rules=[PiiRule(database="*", table="users", columns=["email", "phone"])])
@@ -32,9 +33,9 @@ class MysqlCatalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return [("", name) for name in self.tables]
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
         assert schema == ""
-        return self.tables[table]
+        return typed(self.tables[table])
 
 
 def validate(sql: str, max_rows: int = 200) -> ValidatedQuery:
@@ -228,7 +229,7 @@ def _mysql_select(sql: str) -> Any:
 
 
 def test_second_opinion_uses_a_flat_catalog_on_mysql() -> None:
-    tables = (TableSchema("", "users", ("id", "email")),)
+    tables = (TableSchema("", "users", tuple(typed(["id", "email"]))),)
 
     _cross_check(_mysql_select("SELECT `users`.`id` FROM `users`"), tables, MYSQL)
     with pytest.raises(DomainError) as info:

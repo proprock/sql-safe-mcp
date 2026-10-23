@@ -142,12 +142,14 @@ def _build_database(admin: Engine, database: str, suffix: str, writer: str) -> N
                     "CREATE TABLE dbo.[Contacts] ([Id] int PRIMARY KEY, [Email] nvarchar(100))",
                     "CREATE TABLE dbo.[Canary] ([Id] int NOT NULL, [Note] nvarchar(50))",
                     "CREATE TABLE dbo.[Items] ([Id] int NOT NULL)",
+                    "CREATE TABLE dbo.[Visits] ([Id] int PRIMARY KEY, [Hits] int NOT NULL)",
                     "CREATE TABLE [sales].[Items] ([Id] int NOT NULL)",
                     f"CREATE USER {quote_identifier(writer)} FOR LOGIN {quote_identifier(writer)}",
                     f"ALTER ROLE db_owner ADD MEMBER {quote_identifier(writer)}",
                     "INSERT INTO dbo.[Canary] VALUES (1, N'canary-" + suffix + "')",
                     "INSERT INTO dbo.[Contacts] VALUES (1, N'contact-" + suffix + "@example.test')",
                     "INSERT INTO dbo.[Items] VALUES (1)",
+                    "INSERT INTO dbo.[Visits] VALUES (1, 424242), (2, 515151)",
                     "INSERT INTO [sales].[Items] VALUES (2)",
                 ],
             )
@@ -172,6 +174,7 @@ def _pii_server(url: str, key: bytes, key_env: str, databases: tuple[str, str]) 
         pii=PiiConfig(
             rules=[
                 PiiRule(database="*", schema="dbo", table="Users", columns=["Email", "Phone"]),
+                PiiRule(database="*", schema="dbo", table="Visits", columns=["Hits"]),
                 PiiRule(database=databases[0], schema="dbo", table="Orders", columns=["Total"]),
             ]
         ),

@@ -9,6 +9,11 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- `execute_sql` now checks a PII token against the type of the protected column it is compared
+  with. A string token compared with an integer or decimal column, or any token compared with a
+  column of an unrecognised type, is rejected with `QUERY_REJECTED` before the database runs the
+  query. Before, SQL Server could echo the decrypted value in a conversion error (for example
+  error 245).
 - Driver error messages in logs no longer carry values. Quoted literals (`'…'`, `N'…'`, `"…"`)
   become `'***'` and digit runs of six or more become `***`, since SQL Server and MySQL echo the
   offending value in conversion and duplicate-key errors. A failed `execute_sql` logs only the

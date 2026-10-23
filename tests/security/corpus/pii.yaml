@@ -218,6 +218,18 @@
 - name: token national literal
   sql: "SELECT Id FROM Users WHERE Email = N'{{TOKEN_OWN}}'"
   reason: national string literal is not a plain token literal
+- name: string token against decimal column
+  sql: "SELECT Id FROM Orders WHERE Total = '{{TOKEN_OWN}}'"
+  reason: token type must match the protected column type
+- name: integer token against decimal column
+  sql: "SELECT Id FROM Orders WHERE Total = '{{TOKEN_OWN_INT}}'"
+  reason: int token is not a decimal token
+- name: integer token against string column
+  sql: "SELECT Id FROM Users WHERE Email = '{{TOKEN_OWN_INT}}'"
+  reason: int token against a string column would make the database coerce or fail with the value
+- name: mixed token types in list
+  sql: "SELECT Id FROM Users WHERE Email IN ('{{TOKEN_OWN}}', '{{TOKEN_OWN_INT}}')"
+  reason: every list item must match the column type
 
 # --- malformed, tampered, oversized, cross-alias tokens ----------------------------------------
 - name: cross alias token

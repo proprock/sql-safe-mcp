@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime, time
+from decimal import Decimal
 from fnmatch import fnmatchcase
+from uuid import UUID
 
 from sqlglot import exp
 
@@ -9,7 +12,23 @@ from sql_safe_mcp.config import PiiConfig
 from sql_safe_mcp.security.lineage import AnalyzedQuery, ColumnRef, SourceColumn
 from sql_safe_mcp.security.parser import reject
 from sql_safe_mcp.security.reasons import Reason
+from sql_safe_mcp.security.schema import TypeClass
 from sql_safe_mcp.security.tokens import PREFIX, TokenCodec
+
+# Exact driver value type of a decrypted token -> the column class it may be compared with.
+# bool is an int subclass and datetime a date subclass, so lookups use type(), never isinstance().
+_VALUE_CLASSES: dict[type, TypeClass] = {
+    str: "string",
+    bool: "bool",
+    int: "integer",
+    float: "float",
+    Decimal: "decimal",
+    date: "date",
+    datetime: "datetime",
+    time: "time",
+    UUID: "uuid",
+    bytes: "binary",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,19 +97,23 @@ class PiiPolicy:
         if not _in_where(column):
             raise reject(Reason.PROTECTED_POSITION)
         if isinstance(parent, exp.EQ) and parent.this is column:
-            return [self._token_site(parent.expression)]
+            return [self._token_site(parent.expression, ref.source)]
         if isinstance(parent, exp.In) and parent.this is column and parent.expressions:
-            return [self._token_site(item) for item in parent.expressions]
+            return [self._token_site(item, ref.source) for item in parent.expressions]
         raise reject(Reason.PROTECTED_POSITION)
 
-    def _token_site(self, node: exp.Expression) -> TokenSite:
+    def _token_site(self, node: exp.Expression, source: SourceColumn) -> TokenSite:
         if (
             not isinstance(node, exp.Literal)
             or not node.is_string
             or not str(node.this).startswith(PREFIX)
         ):
             raise reject(Reason.PROTECTED_NEEDS_TOKEN)
-        return TokenSite(node, self._codec.decrypt(str(node.this)))
+        # Decrypt first: a forged token keeps its INVALID_PII_TOKEN error and priority.
+        value = self._codec.decrypt(str(node.this))
+        if _VALUE_CLASSES.get(type(value)) != source.type_class:
+            raise reject(Reason.TOKEN_TYPE_MISMATCH)
+        return TokenSite(node, value)
 
 
 def _in_where(node: exp.Expression) -> bool:

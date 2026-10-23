@@ -10,9 +10,11 @@ from mcp import Client
 from mcp_types import TextContent
 from pydantic import SecretStr
 from sqlalchemy.exc import DBAPIError
+from typed_columns import typed
 
 from sql_safe_mcp.config import AppConfig, LoggingConfig, ServerConfig
 from sql_safe_mcp.mcp_server import create_server
+from sql_safe_mcp.security.schema import ColumnSchema
 
 
 def _config() -> AppConfig:
@@ -199,8 +201,8 @@ class _Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return [("dbo", "Users")]
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return ["Id", "Email"]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(["Id", "Email"])
 
 
 def _patch_database(monkeypatch: Any, connection: _Connection) -> None:

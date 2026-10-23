@@ -62,6 +62,11 @@ reference and is rejected, and `TIME` results beyond 24 hours are not supported.
   functions, and arithmetic on protected columns are rejected.
 - Protected cells are returned as `pii:v1:...` tokens; `NULL` stays `null`. A malformed, tampered,
   wrong-key, or other-alias token fails with the single error `INVALID_PII_TOKEN`.
+- A token is accepted only for a protected column of the same value type: string, integer,
+  float, decimal, boolean, date, time, datetime, uuid, or binary. The type is taken from the
+  reflected column; a column of any other type accepts no token. A mismatch is rejected before
+  the database sees the query, with `QUERY_REJECTED` and the reason "a PII token does not match
+  the type of the protected column".
 - Each result column reports `name`, `source` (`schema`, `table`, `column`, or `null`),
   `protected`, and `encoding` (`json`, `token`, `decimal`, `date`, `time`, `datetime`, `uuid`,
   `base64`).

@@ -52,6 +52,8 @@ def _expand(name: str, arg: str | None, tokens: TokenSources) -> str:
     own = tokens.own.encrypt("value")
     if name == "TOKEN_OWN":
         return own
+    if name == "TOKEN_OWN_INT":
+        return tokens.own.encrypt(1)
     if name == "TOKEN_OTHER":
         return tokens.foreign.encrypt("value")
     if name == "TOKEN_OTHER_KEY_SAME_ALIAS":

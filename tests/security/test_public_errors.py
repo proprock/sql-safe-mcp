@@ -96,6 +96,7 @@ def test_unsupported_constructs_name_the_offender(sql: str, expected: str) -> No
         ("SELECT Email FROM Users ORDER BY Id, Email", Reason.PROTECTED_POSITION),
         ("SELECT Id FROM Users WHERE Email = 'plain'", Reason.PROTECTED_NEEDS_TOKEN),
         ("SELECT Id FROM Users WHERE Name = 'pii:v1:AAAA'", Reason.TOKEN_OUTSIDE_PROTECTED),
+        (f"SELECT Id FROM Users WHERE Email = '{OWN.encrypt(1)}'", Reason.TOKEN_TYPE_MISMATCH),
     ],
 )
 def test_reasons_are_reported_verbatim(sql: str, reason: Reason) -> None:
@@ -218,4 +219,10 @@ def test_alias_is_reported_by_the_query_and_the_codec() -> None:
     assert query.alias == ALIAS == OWN.alias
     assert re.fullmatch(
         r"ValidatedQuery\(alias='srv', database='app', outputs=1, parameters=0\)", repr(query)
+    )
+
+
+def test_token_type_mismatch_text_is_pinned() -> None:
+    assert Reason.TOKEN_TYPE_MISMATCH.value == (
+        "a PII token does not match the type of the protected column"
     )

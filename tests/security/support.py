@@ -7,14 +7,17 @@ import random
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, ClassVar, cast
 
 from hypothesis import strategies as st
+from typed_columns import typed
 
 from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, RuntimeConfig
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.security.dialect import SQLSERVER, SqlDialect
 from sql_safe_mcp.security.pipeline import validate_sql
+from sql_safe_mcp.security.schema import ColumnSchema
 from sql_safe_mcp.security.tokens import TokenCodec
 from sql_safe_mcp.security.validated_query import ValidatedQuery
 from sql_safe_mcp.service import DatabaseService
@@ -47,8 +50,8 @@ class Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return self.tables[(schema, table)]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(self.tables[(schema, table)])
 
 
 def validate(sql: str, max_rows: int = 200) -> ValidatedQuery:
@@ -287,8 +290,10 @@ def render(
     def kw(word: str) -> str:
         return rnd.choice([word.upper(), word.lower(), word.capitalize()])
 
-    def token(value: str) -> str:
-        issued = token_codec.encrypt(value)
+    def token(column: str, value: str) -> str:
+        # The token must match the protected column type: Total is a decimal, the rest strings.
+        typed_value = Decimal(len(value)) if column.endswith("Total") else value
+        issued = token_codec.encrypt(typed_value)
         return "'" + str(issued) + "'"
 
     def literal(value: object) -> str:
@@ -304,8 +309,8 @@ def render(
         if kind == "isnull":
             return f"{item[1]}{ws()}{kw('is')}{ws()}{kw('null')}"
         if kind == "token_eq":
-            return f"{item[1]}{ws()}={ws()}{token(item[2])}"
-        values = f",{ws()}".join(token(v) for v in item[2])
+            return f"{item[1]}{ws()}={ws()}{token(item[1], item[2])}"
+        values = f",{ws()}".join(token(item[1], v) for v in item[2])
         return f"{item[1]}{ws()}{kw('in')}{ws()}({ws()}{values}{ws()})"
 
     names = ["a", "Z_"][alias_style]

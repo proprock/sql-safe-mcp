@@ -33,6 +33,7 @@ class Reason(StrEnum):
     PARSE_FAILED = "the SQL could not be parsed"
     TOKEN_OUTSIDE_PROTECTED = "a PII token can only be compared with a protected column"
     PROTECTED_POSITION = "a protected column can only be projected or compared with a token"
+    TOKEN_TYPE_MISMATCH = "a PII token does not match the type of the protected column"
     PROTECTED_NEEDS_TOKEN = "a protected column can only be compared with a PII token"
     TABLE_GONE = "a referenced table no longer exists"
     TABLE_NOT_FOUND = "a referenced table was not found or is ambiguous; qualify it with a schema"

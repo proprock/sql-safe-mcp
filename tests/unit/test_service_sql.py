@@ -9,10 +9,12 @@ from typing import Any, ClassVar, cast
 import pytest
 from sqlalchemy.exc import DataError, DBAPIError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+from typed_columns import typed
 
 from sql_safe_mcp.config import AppConfig
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.errors import DomainError, ErrorCode
+from sql_safe_mcp.security.schema import ColumnSchema
 from sql_safe_mcp.security.tokens import TokenCodec
 from sql_safe_mcp.service import DatabaseService
 
@@ -83,8 +85,8 @@ class FakeCatalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return self.tables[(schema, table)]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(self.tables[(schema, table)])
 
 
 def _config() -> AppConfig:

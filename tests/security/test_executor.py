@@ -6,12 +6,14 @@ from typing import Any, ClassVar, cast
 from uuid import UUID
 
 import pytest
+from typed_columns import typed
 
 from sql_safe_mcp.config import PiiConfig, PiiRule, RuntimeConfig
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.dialect import SQLSERVER
 from sql_safe_mcp.security.executor import execute_validated
 from sql_safe_mcp.security.pipeline import validate_sql
+from sql_safe_mcp.security.schema import ColumnSchema
 from sql_safe_mcp.security.tokens import TokenCodec
 from sql_safe_mcp.security.validated_query import ValidatedQuery
 
@@ -29,8 +31,8 @@ class Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return self.tables[(schema, table)]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(self.tables[(schema, table)])
 
 
 class FakeResult:

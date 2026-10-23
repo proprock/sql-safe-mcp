@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlglot import exp
 from support import KEY, OWN, RUNTIME, Catalog, SpyConnection, SpyResult, validate
+from typed_columns import typed
 
 import sql_safe_mcp.security.schema as schema_module
 import sql_safe_mcp.security.validated_query as vq_module
@@ -29,6 +30,7 @@ from sql_safe_mcp.security.parser import (
 from sql_safe_mcp.security.policy import PiiPolicy, PolicyDecision
 from sql_safe_mcp.security.reasons import Reason
 from sql_safe_mcp.security.schema import (
+    ColumnSchema,
     ReflectedCatalog,
     SchemaCache,
     TableSchema,
@@ -183,9 +185,9 @@ class StubInspector:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
 
-    def get_columns(self, table: str, schema: str | None = None) -> list[dict[str, str]]:
+    def get_columns(self, table: str, schema: str | None = None) -> list[dict[str, Any]]:
         self.calls.append((table, schema))
-        return [{"name": f"{schema}.{table}.c"}]
+        return [{"name": f"{schema}.{table}.c", "type": sa.String()}]
 
 
 def test_columns_are_reflected_per_schema_and_cached_per_table(
@@ -196,10 +198,10 @@ def test_columns_are_reflected_per_schema_and_cached_per_table(
     catalog = ReflectedCatalog(
         sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", "d"
     )
-    assert catalog.columns("sales", "Items") == ("sales.Items.c",)
-    assert catalog.columns("dbo", "Items") == ("dbo.Items.c",)
-    assert catalog.columns("sales", "Items") == ("sales.Items.c",)
-    assert catalog.columns("sales", "Other") == ("sales.Other.c",)
+    assert catalog.columns("sales", "Items") == (ColumnSchema("sales.Items.c", "string"),)
+    assert catalog.columns("dbo", "Items") == (ColumnSchema("dbo.Items.c", "string"),)
+    assert catalog.columns("sales", "Items") == (ColumnSchema("sales.Items.c", "string"),)
+    assert catalog.columns("sales", "Other") == (ColumnSchema("sales.Other.c", "string"),)
     assert inspector.calls == [("Items", "sales"), ("Items", "dbo"), ("Other", "sales")]
 
 
@@ -269,8 +271,8 @@ def _tables(*tables: TableSchema) -> Sequence[TableSchema]:
     return tables
 
 
-USERS = TableSchema("dbo", "Users", ("Id", "Name"))
-ORDERS = TableSchema("dbo", "Orders", ("Id", "UserId"))
+USERS = TableSchema("dbo", "Users", tuple(typed(["Id", "Name"])))
+ORDERS = TableSchema("dbo", "Orders", tuple(typed(["Id", "UserId"])))
 
 
 def test_the_cross_check_accepts_a_fully_resolved_query() -> None:

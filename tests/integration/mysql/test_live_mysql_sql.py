@@ -331,3 +331,40 @@ def test_live_concurrent_execute_sql_calls(live_mysql: LiveMySql) -> None:
             assert all(_ids(result) == [1] for result in results)
 
     asyncio.run(scenario())
+
+
+def test_live_token_of_another_type_is_rejected_before_the_database(live_mysql: LiveMySql) -> None:
+    before = _canary(live_mysql)
+
+    async def scenario() -> None:
+        async with Client(create_server(live_mysql.sql_config), raise_exceptions=True) as client:
+            wrong = _codec(live_mysql).encrypt(424242)
+            result = await _sql(
+                client, live_mysql, f"SELECT id FROM people WHERE email = '{wrong}'"
+            )
+            text = _error_text(result)
+            assert "[QUERY_REJECTED]" in text
+            assert "424242" not in text
+
+    asyncio.run(scenario())
+    assert _canary(live_mysql) == before
+
+
+def test_live_token_against_an_int_column_must_be_an_int_token(live_mysql: LiveMySql) -> None:
+    async def scenario() -> None:
+        async with Client(create_server(live_mysql.sql_config), raise_exceptions=True) as client:
+            codec = _codec(live_mysql)
+            accepted = await _sql(
+                client, live_mysql, f"SELECT id FROM visits WHERE hits = '{codec.encrypt(424242)}'"
+            )
+            assert _ids(accepted) == [1]
+            wrong = await _sql(
+                client,
+                live_mysql,
+                f"SELECT id FROM visits WHERE hits = '{codec.encrypt('424242')}'",
+            )
+            text = _error_text(wrong)
+            assert "[QUERY_REJECTED]" in text
+            assert "424242" not in text
+
+    asyncio.run(scenario())

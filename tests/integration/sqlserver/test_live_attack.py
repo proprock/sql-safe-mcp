@@ -254,3 +254,29 @@ def test_a_test_only_alias_with_the_same_key_still_rejects_the_token(attack_lab:
         assert again.row_count == 1
     finally:
         registry.dispose()
+
+
+def test_a_string_token_against_an_int_column_is_rejected_before_the_database(
+    attack_lab: AttackLab, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Before the type check SQL Server answered with error 245 that echoed the value."""
+    lab = attack_lab
+    value = "424242"
+    mark = lab.recorder.mark()
+    with caplog.at_level(logging.DEBUG):
+        error = error_of(lab, f"SELECT Id FROM Visits WHERE Hits = '{token(lab, value)}'")
+        listed = error_of(lab, f"SELECT Id FROM Visits WHERE Hits IN ('{token(lab, value)}')")
+    assert error.code is ErrorCode.QUERY_REJECTED
+    assert listed.code is ErrorCode.QUERY_REJECTED
+    # Reflection queries may reach the driver; the user's predicate must not.
+    sent = [statement for statement, _ in lab.recorder.since(mark)]
+    assert not [statement for statement in sent if "[Hits]" in statement and "WHERE" in statement]
+    captured = capfd.readouterr()
+    for text in (str(error), str(listed), caplog.text, captured.out, captured.err):
+        assert value not in text
+
+
+def test_an_int_token_against_an_int_column_runs(attack_lab: AttackLab) -> None:
+    lab = attack_lab
+    result = run(lab, f"SELECT Id FROM Visits WHERE Hits = '{codec(lab).encrypt(424242)}'")
+    assert result.rows == [[1]]

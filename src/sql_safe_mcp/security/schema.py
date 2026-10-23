@@ -5,9 +5,10 @@ from collections import OrderedDict
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from threading import Lock
-from typing import Protocol
+from typing import Literal, Protocol
 
 from sqlalchemy import Connection, inspect
+from sqlalchemy import types as sqltypes
 from sqlalchemy.exc import NoSuchTableError
 from sqlglot import exp
 
@@ -16,12 +17,54 @@ from sql_safe_mcp.security.dialect import SQLSERVER, SqlDialect
 from sql_safe_mcp.security.parser import reject
 from sql_safe_mcp.security.reasons import Reason
 
+TypeClass = Literal[
+    "string",
+    "integer",
+    "float",
+    "decimal",
+    "bool",
+    "date",
+    "time",
+    "datetime",
+    "uuid",
+    "binary",
+    "other",
+]
+
+# Order matters: Float and Boolean are checked before their broader parents.
+_TYPE_CLASSES: tuple[tuple[tuple[type, ...], TypeClass], ...] = (
+    ((sqltypes.Boolean,), "bool"),
+    ((sqltypes.Integer,), "integer"),
+    ((sqltypes.Float,), "float"),
+    ((sqltypes.Numeric,), "decimal"),
+    ((sqltypes.String,), "string"),
+    ((sqltypes.DateTime,), "datetime"),
+    ((sqltypes.Date,), "date"),
+    ((sqltypes.Time,), "time"),
+    ((sqltypes.Uuid,), "uuid"),
+    ((sqltypes._Binary,), "binary"),
+)
+
+
+def type_class(column_type: object) -> TypeClass:
+    """Map a reflected SQLAlchemy type to the coarse class a PII token is checked against."""
+    for bases, name in _TYPE_CLASSES:
+        if isinstance(column_type, bases):
+            return name
+    return "other"
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnSchema:
+    name: str
+    type_class: TypeClass
+
 
 @dataclass(frozen=True, slots=True)
 class TableSchema:
     schema: str
     name: str
-    columns: tuple[str, ...]
+    columns: tuple[ColumnSchema, ...]
 
 
 class TableCatalog(Protocol):
@@ -29,7 +72,7 @@ class TableCatalog(Protocol):
 
     def list_tables(self) -> Sequence[tuple[str, str]]: ...
 
-    def columns(self, schema: str, table: str) -> Sequence[str]: ...
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]: ...
 
 
 class SchemaCache:
@@ -87,7 +130,7 @@ class ReflectedCatalog:
             self._cache.put(key, cached)
         return list(cached)
 
-    def columns(self, schema: str, table: str) -> tuple[str, ...]:
+    def columns(self, schema: str, table: str) -> tuple[ColumnSchema, ...]:
         key = (*self._scope, "columns", schema, table)
         cached = self._cache.get(key)
         if cached is None:
@@ -95,7 +138,10 @@ class ReflectedCatalog:
                 reflected = inspect(self._connection).get_columns(table, schema=schema or None)
             except NoSuchTableError as exc:
                 raise reject(Reason.TABLE_GONE) from exc
-            cached = tuple(str(column["name"]) for column in reflected)
+            cached = tuple(
+                ColumnSchema(str(column["name"]), type_class(column.get("type")))
+                for column in reflected
+            )
             self._cache.put(key, cached)
         return cached
 
