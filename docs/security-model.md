@@ -13,8 +13,15 @@ PII protection covers only configured columns. Each `all_pii_safe` server alias 
 key and a distinct authenticated token domain. Tokens are bearer secrets and must not be logged.
 
 SQL validation is an allowlist. Unknown syntax, cross-database names, unresolved tables or columns,
-unsupported lineage, and unsupported protected-value types fail closed. The executor accepts only a
-`ValidatedQuery` created after the final AST check.
+unsupported lineage, and unsupported protected-value types fail closed. An alias may name only a
+column, literal, `NULL`, negated literal, or `COUNT(*)`; any other aliased expression, such as
+`(Email) AS e` or `(Email = 'x') AS hit`, is rejected as an unsupported projection at parse time,
+and lineage independently refuses to label an untraceable projection as a literal. Regression
+cases: "parenthesized projection under alias" and its neighbours in
+`tests/security/corpus/pii.yaml`, their MySQL equivalents in
+`tests/security/corpus_mysql/mysql.yaml`, and the hand-built AST cases in
+`tests/security/test_boundaries.py`. The executor accepts only a `ValidatedQuery` created after the
+final AST check.
 
 Diagnostic logs go to stderr. A logged database error is limited to its class, SQLSTATE or code,
 and message; the message has the connection URL's user name and password replaced with `***`,
