@@ -155,13 +155,13 @@ def instance(kind: type[exp.Expr]) -> exp.Expr:
     return exp.Literal.number(1) if kind is exp.Literal else kind()
 
 
-def allowed_parent_pairs() -> set[tuple[type[exp.Expr], type[exp.Expr]]]:
+def allowed_parent_pairs() -> set[tuple[type[exp.Expr], type]]:
     """(kind, parent) pairs the position allowlist admits, with the root as `exp.Select` itself."""
     return {
         (kind, parent)
         for kind, parents in _ALLOWED_PARENTS.items()
         for parent in parents
-        if parent is not None
+        if parent is not type(None)
     }
 
 

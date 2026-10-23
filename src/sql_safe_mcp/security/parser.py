@@ -82,11 +82,11 @@ _ALLOWED_ARGS: dict[type[exp.Expr], frozenset[str]] = {
 _PLACEHOLDER_ARGS = frozenset({"this"})
 _PREDICATE_PARENTS = frozenset({exp.Where, exp.And, exp.Or, exp.Paren, exp.Join})
 _VALUE_PARENTS = frozenset({*_COMPARISONS, exp.In})
-# node type -> parent types it may sit under (None: the query root). A node type that is allowed
+# node type -> parent types it may sit under (NoneType: the query root). A node type that is allowed
 # somewhere is still rejected in any position not listed here; a bare Column or Literal used as a
 # boolean (WHERE a, ON 1) is not a predicate operand, so And/Or/Paren/Where/Join are not parents.
-_ALLOWED_PARENTS: dict[type[exp.Expr], frozenset[type[exp.Expr] | None]] = {
-    exp.Select: frozenset({None}),
+_ALLOWED_PARENTS: dict[type[exp.Expr], frozenset[type]] = {
+    exp.Select: frozenset({type(None)}),
     exp.From: frozenset({exp.Select}),
     exp.Join: frozenset({exp.Select}),
     exp.Where: frozenset({exp.Select}),
@@ -185,12 +185,10 @@ def _check_node(node: exp.Expr, allow_placeholders: bool) -> None:
 
 def _check_position(node: exp.Expr) -> None:
     kind = type(node)
-    parent = node.parent
-    parent_kind = None if parent is None else type(parent)
+    parent_kind = type(node.parent)
     parents = _PLACEHOLDER_PARENTS if kind is exp.Placeholder else _ALLOWED_PARENTS[kind]
     if parent_kind not in parents:
-        where = "root" if parent_kind is None else parent_kind.__name__
-        raise reject(Reason.NODE_UNSUPPORTED, f"{kind.__name__} in {where}")
+        raise reject(Reason.NODE_UNSUPPORTED, f"{kind.__name__} in {parent_kind.__name__}")
 
 
 def validate_allowlist(query: exp.Expression, *, allow_placeholders: bool = False) -> None:

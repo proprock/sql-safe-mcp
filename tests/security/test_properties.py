@@ -143,7 +143,7 @@ def test_every_allowed_node_is_rejected_in_an_unlisted_position(parent: type[exp
         checks.check_node_position_is_allowlisted(kind, parent)
 
 
-def _observed_parent_pairs(sqls: list[str]) -> set[tuple[type[exp.Expr], type[exp.Expr]]]:
+def _observed_parent_pairs(sqls: list[str]) -> set[tuple[type[exp.Expr], type]]:
     pairs = set()
     for sql in sqls:
         for node in parse_select(sql, LIMITS).walk():
