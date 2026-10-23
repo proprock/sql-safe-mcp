@@ -7,7 +7,8 @@ from collections.abc import Callable, Sequence
 from typing import Any, ClassVar, cast
 
 import pytest
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DataError, DBAPIError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from sql_safe_mcp.config import AppConfig
 from sql_safe_mcp.db.registry import EngineRegistry
@@ -259,6 +260,51 @@ def test_database_errors_are_redacted_and_not_logged(caplog: pytest.LogCaptureFi
     assert error.correlation_id
     for leaked in ("secret_column", "bind-value-leak", "pii:v1:leak", "hidden"):
         assert leaked not in text
+
+
+CANARY = "canary.person@example.org"
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        DBAPIError("stmt", (), Exception(f"[HYT00] Query timeout expired near '{CANARY}'")),
+        DBAPIError("stmt", (), Exception(f"[08001] Cannot open database near '{CANARY}'")),
+        DBAPIError("stmt", (), Exception(f"Permission was denied on '{CANARY}'")),
+        DBAPIError("stmt", (), Exception(f"Conversion failed when converting '{CANARY}' to int")),
+        OperationalError("stmt", (), Exception(f"lost connection near '{CANARY}'")),
+        DataError("stmt", (), Exception(f"Data truncated for value N'{CANARY}'")),
+        SQLAlchemyTimeoutError(f"QueuePool limit reached near '{CANARY}'"),
+    ],
+    ids=["timeout", "connection", "denied", "unclassified", "operational", "data", "pool-timeout"],
+)
+def test_execute_sql_failures_never_log_driver_message_text(
+    driver: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    service, _ = make(error=driver)
+    with caplog.at_level(logging.DEBUG):
+        error = error_of(service, "SELECT Id FROM Users")
+    assert CANARY not in caplog.text
+    assert CANARY not in str(error)
+    assert "message=" not in caplog.text
+
+
+def test_other_operations_log_the_redacted_driver_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    driver = DBAPIError("stmt", (), Exception(f"[HYT00] Login timeout near '{CANARY}'"))
+    service, _ = make(error=driver)
+    with caplog.at_level(logging.DEBUG), pytest.raises(DomainError):
+        asyncio.run(service._run("secure", "app", "list_tables", service_raises(driver)))
+    assert CANARY not in caplog.text
+    assert "Login timeout near '***'" in caplog.text
+
+
+def service_raises(error: Exception) -> Callable[[Any], Any]:
+    def operation(engine: Any) -> Any:
+        raise error
+
+    return operation
 
 
 def test_statement_timeout_is_a_public_timeout() -> None:

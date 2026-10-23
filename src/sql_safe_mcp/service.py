@@ -172,7 +172,8 @@ class DatabaseService:
             operation,
             error.code,
             error.correlation_id or "-",
-            describe_error(cause, secrets),
+            # execute_sql drivers echo caller-influenced values and PII, so no message text.
+            describe_error(cause, secrets, include_message=operation != "execute_sql"),
         )
         return error
 

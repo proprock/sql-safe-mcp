@@ -368,7 +368,9 @@ logging:
 
 A failed connection or operation logs the driver error class, the SQLSTATE or numeric code, and the
 driver message. The connection URL's user name and password are replaced with `***` and its host with the
-server alias in that message, control characters are replaced, and long messages are truncated. A `TIMEOUT` or
+server alias in that message. Quoted literals (`'…'`, `N'…'`, `"…"`) become `'***'`, digit runs of six or
+more become `***`, control characters are replaced, and long messages are truncated. A failed `execute_sql`
+logs only the class and the code, never the message, because drivers echo the offending value. A `TIMEOUT` or
 `CONNECTION_FAILED` error shown to the caller carries a `Reference`; the same value appears as
 `reference=` on the matching log line.
 

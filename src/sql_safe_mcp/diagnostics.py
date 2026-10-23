@@ -9,6 +9,8 @@ from sqlalchemy.engine import make_url
 
 _MAX_MESSAGE_CHARS = 500
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]+")
+_QUOTED_LITERAL = re.compile(r"""(['"])(?:(?!\1).)*\1""", re.DOTALL)
+_LONG_DIGITS = re.compile(r"\d{6,}")
 
 
 def configure_logging(level: str) -> None:
@@ -53,9 +55,13 @@ def _secret_pattern(secret: str) -> str:
     return f"{start}{re.escape(secret)}{end}"
 
 
-def describe_error(exc: BaseException, redactions: Iterable[tuple[str, str]]) -> str:
+def describe_error(
+    exc: BaseException, redactions: Iterable[tuple[str, str]], *, include_message: bool = True
+) -> str:
     """One log-safe line for a driver error: class, SQLSTATE or code, redacted message."""
     name, code, message = _driver_parts(exc)
+    if not include_message:
+        return f"{name}{code}"
     for secret, replacement in sorted(set(redactions), key=lambda pair: len(pair[0]), reverse=True):
         if secret:
             message = re.sub(
@@ -64,6 +70,10 @@ def describe_error(exc: BaseException, redactions: Iterable[tuple[str, str]]) ->
                 message,
                 flags=re.IGNORECASE,
             )
+    # Drivers echo offending values in quotes or as long digit runs (SQL Server error 245 and
+    # MySQL 1062/1292 do), so those are never logged.
+    message = _QUOTED_LITERAL.sub(lambda match: f"{match[1]}***{match[1]}", message)
+    message = _LONG_DIGITS.sub("***", message)
     message = _CONTROL_CHARACTERS.sub(" ", message).strip()
     if len(message) > _MAX_MESSAGE_CHARS:
         message = message[:_MAX_MESSAGE_CHARS] + "..."

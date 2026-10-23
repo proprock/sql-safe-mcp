@@ -78,6 +78,32 @@ def test_describe_error_redacts_short_usernames_only_as_whole_words() -> None:
     assert "Password rejected" in line
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Conversion failed for value 'john@x.com'", "Conversion failed for value '***'"),
+        ("Invalid value N'john@x.com' here", "Invalid value N'***' here"),
+        ('Bad value "john@x.com" here', 'Bad value "***" here'),
+        ("Duplicate entry 'a@x.com' for key 'email' ", "Duplicate entry '***' for key '***'"),
+        ("Cannot convert 1234567890 to int", "Cannot convert *** to int"),
+        ("Cannot convert 12345 to int", "Cannot convert 12345 to int"),
+        ("Value 'it''s' bad", "Value '***''***' bad"),
+    ],
+)
+def test_describe_error_redacts_quoted_literals_and_long_digit_runs(
+    message: str, expected: str
+) -> None:
+    assert describe_error(RuntimeError(message), ()) == f"RuntimeError message={expected}"
+
+
+def test_describe_error_can_omit_the_message() -> None:
+    error = _wrapped(_OdbcError("22018", "Conversion failed for value 'john@x.com'"))
+
+    line = describe_error(error, (), include_message=False)
+
+    assert line == "_OdbcError sqlstate=22018"
+
+
 def test_describe_error_removes_control_characters_and_truncates() -> None:
     forged = "first\r\nINFO forged log line\x1b[0m" + "x" * 1000
 

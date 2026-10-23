@@ -9,6 +9,7 @@ from typing import Any
 from mcp import Client
 from mcp_types import TextContent
 from pydantic import SecretStr
+from sqlalchemy.exc import DBAPIError
 
 from sql_safe_mcp.config import AppConfig, LoggingConfig, ServerConfig
 from sql_safe_mcp.mcp_server import create_server
@@ -297,6 +298,33 @@ def test_execute_sql_rejected_query_is_a_tool_error_without_execution(monkeypatc
 
     asyncio.run(scenario())
     assert connection.calls == []
+
+
+def test_execute_sql_driver_error_values_reach_neither_the_tool_error_nor_the_log(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    canary = "canary.person@example.org"
+
+    class Failing(_Connection):
+        def exec_driver_sql(self, statement: str, parameters: tuple[Any, ...]) -> _Result:
+            raise DBAPIError(statement, parameters, Exception(f"Conversion failed for '{canary}'"))
+
+    _patch_database(monkeypatch, Failing())
+
+    async def scenario() -> None:
+        async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "execute_sql",
+                {"server": "secure", "database": "app", "sql": "SELECT Id FROM Users"},
+            )
+            assert result.is_error is True
+            content = result.content[0]
+            assert isinstance(content, TextContent)
+            assert canary not in content.text
+
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(scenario())
+    assert canary not in caplog.text
 
 
 def test_execute_sql_output_schema_is_typed(monkeypatch: Any) -> None:

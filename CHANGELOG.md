@@ -7,6 +7,13 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+### Security
+
+- Driver error messages in logs no longer carry values. Quoted literals (`'…'`, `N'…'`, `"…"`)
+  become `'***'` and digit runs of six or more become `***`, since SQL Server and MySQL echo the
+  offending value in conversion and duplicate-key errors. A failed `execute_sql` logs only the
+  driver error class and its SQLSTATE or numeric code, with no message text.
+
 ## [1.5.2] - 2026-10-05
 
 ### Security

@@ -63,7 +63,7 @@ markers = [
 [tool.mutmut]
 source_paths = ["src/sql_safe_mcp"]
 also_copy = ["server.json", "README.md", "tools", "scripts", "compose.sqlserver.yml", "compose.mysql.yml"]
-only_mutate = ["*security/*.py", "*config.py"]
+only_mutate = ["*security/*.py", "*config.py", "*diagnostics.py", "*service.py"]
 mutate_only_covered_lines = true
 pytest_add_cli_args = ["-q", "-m", "not integration and not deep", "-p", "no:cacheprovider"]
 pytest_add_cli_args_test_selection = ["tests/unit", "tests/security", "tests/contract"]
