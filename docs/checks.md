@@ -48,8 +48,15 @@ Coverage does not replace behavioral assertions. Review the missing-line report,
 tests or document an intentional exclusion, and report the result. Do not state that any check
 passed unless it was executed.
 
-GitHub Actions runs this commit/PR fast gate on supported Python versions and builds both distribution
-formats in a clean environment. Docker-backed SQL Server integration tests never run in hosted CI;
+GitHub Actions runs this commit/PR fast gate on supported Python versions, extended with
+`tests/security -m "not deep"` (`HYPOTHESIS_PROFILE=security-fast`) and a coverage floor of 95%
+(`--cov-fail-under=95`) over unit, contract and security tests. A separate job runs `pip-audit` on
+the locked dependencies, so a known vulnerability fails the build. Dependabot proposes weekly
+`uv` updates, grouping minor and patch versions.
+`tests/security/sql_snapshot.json` pins the SQL generated for every allowlisted query on both
+dialects; after an SQLGlot or generator change, review each changed statement, then regenerate it
+with `UPDATE_SQL_SNAPSHOT=1 uv run pytest tests/security/test_sql_snapshot.py`.
+CI also builds both distribution formats in a clean environment. Docker-backed SQL Server integration tests never run in hosted CI;
 they remain an explicit local or externally managed disposable-database gate.
 
 Validate the example configuration after defining its documented environment variables:
