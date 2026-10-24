@@ -60,12 +60,15 @@ sql-safe-mcp --verify-pii-rules --strict
 
 For every `all_pii_safe` alias the command connects to each database named in its rules (to every
 visible database for `"*"`), reflects tables and columns, and prints to stderr, per rule, how many
-tables and columns it matched. A rule that matches nothing prints `WARNING`; with `--strict` the
+tables and columns it matched. `pii.exposed_columns` and `pii.deny` entries are checked the same
+way, so a misspelled `deny` entry that would silently deny nothing is reported. An entry that
+matches nothing prints `WARNING`; with `--strict` the
 command then exits 2. A database that cannot be reached or reflected prints `ERROR` and exits 2
 with or without `--strict`. Only object names are printed, never URLs, keys, or rows.
 
 The command also prints `WARNING: unprotected column looks personal` for every column no rule
-protects whose name contains one of: `email`, `phone`, `mobile`, `ssn`, `passport`, `dob`,
+protects whose name contains one of (with `deny-by-default`, only columns in `exposed_columns`
+are checked, and denied columns never are): `email`, `phone`, `mobile`, `ssn`, `passport`, `dob`,
 `birth`, `address`, `zip`, `postal`, `name`, `diagnos`, `icd`, `mrn`, `guardian`, `ip_`, `device`,
 `photo`, `notes`. This list is fixed and name-based: it misses misspelled or opaque names, flags
 harmless ones, and never changes the exit code. It is a hint, not a guarantee that no personal

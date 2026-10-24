@@ -7,7 +7,7 @@ from fnmatch import fnmatchcase
 from sqlalchemy import inspect
 from sqlalchemy.exc import NoSuchTableError
 
-from sql_safe_mcp.config import AppConfig, PiiRule, ServerConfig
+from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, ServerConfig
 from sql_safe_mcp.db.extras import extras_for
 from sql_safe_mcp.db.reflection import list_tables
 from sql_safe_mcp.db.registry import EngineRegistry
@@ -58,11 +58,15 @@ def _database_names(rules: Sequence[PiiRule]) -> tuple[set[str], bool]:
     return explicit, any(rule.database == "*" for rule in rules)
 
 
+def _scoped_rules(pii: PiiConfig) -> list[PiiRule]:
+    return [*pii.rules, *pii.exposed_columns, *pii.deny]
+
+
 def collect_catalog(config: AppConfig, alias: str) -> Catalog:
     """Reflect every database named by the alias's rules; ``*`` means every visible database."""
     server = config.servers[alias]
     assert server.pii is not None
-    explicit, wildcard = _database_names(server.pii.rules)
+    explicit, wildcard = _database_names(_scoped_rules(server.pii))
     registry = EngineRegistry(config)
     secrets = secrets_for(server.connection_url.get_secret_value(), alias)
     try:
@@ -118,39 +122,57 @@ def _describe(rule: PiiRule) -> str:
     return f"{rule.database}.{schema}{rule.table}({', '.join(rule.columns)})"
 
 
+type ColumnKey = tuple[str, str | None, str, str]
+
+
+def _match_columns(rule: PiiRule, catalog: Catalog) -> tuple[int, set[ColumnKey]]:
+    """The tables a rule touches and the (database, schema, table, column) keys it covers."""
+    wanted = {column.casefold() for column in rule.columns}
+    tables = 0
+    covered: set[ColumnKey] = set()
+    for database, entries in catalog.items():
+        for schema, table, names in entries:
+            if not _rule_matches(rule, database, schema, table):
+                continue
+            hits = [name for name in names if "*" in wanted or name.casefold() in wanted]
+            if not hits:
+                continue
+            tables += 1
+            covered.update((database, schema, table, name.casefold()) for name in hits)
+    return tables, covered
+
+
 def audit_server(alias: str, server: ServerConfig, catalog: Catalog) -> AuditReport:
-    """Per-rule match counts and a name-based advisor for columns no rule protects."""
+    """Per-entry match counts and a name-based advisor for columns that are left open."""
     assert server.pii is not None
+    pii = server.pii
     lines: list[str] = []
     unmatched = 0
-    protected: set[tuple[str, str | None, str, str]] = set()
-    for rule in server.pii.rules:
-        wanted = {column.casefold() for column in rule.columns}
-        tables = columns = 0
-        for database, entries in catalog.items():
-            for schema, table, names in entries:
-                if not _rule_matches(rule, database, schema, table):
-                    continue
-                hits = [name for name in names if name.casefold() in wanted]
-                if not hits:
-                    continue
-                tables += 1
-                columns += len(hits)
-                protected.update((database, schema, table, name.casefold()) for name in hits)
-        if tables == 0:
-            unmatched += 1
-            lines.append(f"WARNING: {alias}: rule {_describe(rule)} matches no table or column")
-        else:
-            lines.append(
-                f"{alias}: rule {_describe(rule)} matched {tables} table(s), {columns} column(s)"
-            )
+    covered: dict[str, set[ColumnKey]] = {"rule": set(), "exposed": set(), "deny": set()}
+    sections = (("rule", pii.rules), ("exposed", pii.exposed_columns), ("deny", pii.deny))
+    for kind, entries in sections:
+        for rule in entries:
+            tables, keys = _match_columns(rule, catalog)
+            covered[kind].update(keys)
+            if tables == 0:
+                unmatched += 1
+                lines.append(
+                    f"WARNING: {alias}: {kind} {_describe(rule)} matches no table or column"
+                )
+            else:
+                lines.append(
+                    f"{alias}: {kind} {_describe(rule)} matched {tables} table(s), "
+                    f"{len(keys)} column(s)"
+                )
     for database, entries in catalog.items():
         for schema, table, names in entries:
             for name in names:
-                folded = name.casefold()
-                if (database, schema, table, folded) in protected:
+                key = (database, schema, table, name.casefold())
+                if key in covered["deny"] or key in covered["rule"]:
                     continue
-                if any(part in folded for part in SUSPICIOUS_NAME_PARTS):
+                if pii.mode == "deny-by-default" and key not in covered["exposed"]:
+                    continue
+                if any(part in key[3] for part in SUSPICIOUS_NAME_PARTS):
                     qualified = ".".join(part for part in (database, schema, table, name) if part)
                     lines.append(
                         f"WARNING: {alias}: unprotected column looks personal: {qualified}"

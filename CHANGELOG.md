@@ -16,6 +16,8 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
   database, tables and columns read, protected column count, row count, truncation, and elapsed
   time (or the error `code`). It never contains SQL, bind values, rows, or tokens. Off by default;
   the tool response is unchanged.
+- `--verify-pii-rules` also checks `pii.exposed_columns` and `pii.deny` entries (unmatched ones
+  warn and fail `--strict`) and, in `deny-by-default`, advises only on exposed columns.
 - `pii.mode: deny-by-default` protects every column not listed in `pii.exposed_columns`, and
   `pii.deny` rejects any reference to a column with `QUERY_REJECTED` ("a denied column cannot be
   referenced"). Existing configurations are unchanged. See `docs/configuration.md`.
