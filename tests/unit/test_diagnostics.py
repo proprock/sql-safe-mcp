@@ -116,6 +116,28 @@ def test_describe_error_removes_control_characters_and_truncates() -> None:
     assert line.endswith("...")
 
 
+def test_describe_error_redacts_the_longest_secret_first() -> None:
+    message = "connect a.b.c failed"
+    redactions = (("b.c", "short"), ("a.b.c", "***"))
+
+    assert describe_error(RuntimeError(message), redactions) == (
+        "RuntimeError message=connect *** failed"
+    )
+
+
+def test_describe_error_replaces_each_control_run_with_one_space() -> None:
+    assert describe_error(RuntimeError("a\r\n\x00b"), ()) == "RuntimeError message=a b"
+
+
+def test_describe_error_truncates_only_beyond_the_limit() -> None:
+    at_limit = "x" * 500
+
+    assert describe_error(RuntimeError(at_limit), ()) == f"RuntimeError message={at_limit}"
+    assert describe_error(RuntimeError(at_limit + "y"), ()) == (
+        f"RuntimeError message={at_limit}..."
+    )
+
+
 def test_configure_logging_sets_package_level_and_pins_sqlalchemy(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from collections.abc import Callable, Sequence
 from typing import Any, ClassVar, cast
 
@@ -300,6 +301,34 @@ def test_other_operations_log_the_redacted_driver_message(
         asyncio.run(service._run("secure", "app", "list_tables", service_raises(driver)))
     assert CANARY not in caplog.text
     assert "Login timeout near '***'" in caplog.text
+
+
+def _failure_log_line(driver: Exception, caplog: pytest.LogCaptureFixture) -> str:
+    service, _ = make(error=driver)
+    with caplog.at_level(logging.DEBUG), pytest.raises(DomainError):
+        asyncio.run(service._run("secure", "app", "list_tables", service_raises(driver)))
+    (record,) = [r for r in caplog.records if r.getMessage().startswith("operation failed")]
+    return record.getMessage()
+
+
+def test_failure_log_line_names_the_alias_in_place_of_the_host_and_the_reference(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    driver = DBAPIError("stmt", (), Exception("[HYT00] Login timeout for sql"))
+
+    line = _failure_log_line(driver, caplog)
+
+    assert line.startswith("operation failed server=secure database=app operation=list_tables ")
+    assert line.endswith("message=[HYT00] Login timeout for secure")
+    assert re.search(r"reference=[0-9a-f]{32} ", line)
+
+
+def test_failure_log_line_marks_a_missing_reference(caplog: pytest.LogCaptureFixture) -> None:
+    driver = DBAPIError("stmt", (), Exception("Permission was denied on object"))
+
+    line = _failure_log_line(driver, caplog)
+
+    assert " reference=- " in line
 
 
 def service_raises(error: Exception) -> Callable[[Any], Any]:
