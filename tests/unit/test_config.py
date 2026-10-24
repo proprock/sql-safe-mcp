@@ -789,6 +789,16 @@ def test_logging_level_accepts_standard_levels(tmp_path: Path, level: str) -> No
     assert load_config(path, {}).logging.level == level
 
 
+def test_logging_audit_is_off_by_default_and_opt_in(tmp_path: Path) -> None:
+    default = load_config(_write(tmp_path, "version: 1\n" + _MINIMAL_SERVER), {})
+    enabled = load_config(
+        _write(tmp_path, "version: 1\nlogging:\n  audit: true\n" + _MINIMAL_SERVER), {}
+    )
+
+    assert default.logging.audit is False
+    assert enabled.logging.audit is True
+
+
 @pytest.mark.parametrize("body", ["  level: debug\n", "  level: TRACE\n", "  file: x.log\n"])
 def test_logging_rejects_unknown_levels_and_keys(tmp_path: Path, body: str) -> None:
     path = _write(tmp_path, "version: 1\nlogging:\n" + body + _MINIMAL_SERVER)

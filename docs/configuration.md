@@ -381,6 +381,7 @@ hosts show it in their own MCP log or console.
 ```yaml
 logging:
   level: INFO # DEBUG, INFO, WARNING or ERROR (uppercase)
+  audit: false # true writes one audit line per execute_sql call
 ```
 
 | Level | What you see |
@@ -402,3 +403,27 @@ logging in to the server, while `operation failed` after a `connect ok` points a
 
 Connection URLs, credentials, keys, tokens, SQL text, bind values, and result rows are never
 logged. SQLAlchemy's own statement logging stays off at every level.
+
+### Audit log
+
+With `audit: true` (default `false`), every `execute_sql` call that reaches the database layer writes
+one `INFO` line to the `sql_safe_mcp.audit` logger, on stderr with the rest, whatever `level` is:
+
+```text
+audit server=secure database=app tables=dbo.Users columns=dbo.Users.Email,dbo.Users.Id protected=1 row_count=2 truncated=False elapsed_ms=12 reference=0f3c9a1e5b7d4c2a8e6f1b3d5a7c9e0f
+```
+
+`tables` and `columns` list every table and column the query reads, including those used only in
+`WHERE` or `JOIN`, as reflected `schema.table[.column]` names, sorted. `protected` is the number of
+returned columns that are PII tokens. `row_count` and `truncated` describe the result. A field with
+nothing to report shows `-`. `reference` is a fresh identifier for the line; when the call failed
+it is the error's `Reference`, if the error has one.
+
+A failed call writes the same line with `code=<ErrorCode>` in place of `row_count` and `truncated`.
+A query rejected before its tables were resolved shows `tables=- columns=- protected=-`. A call
+refused for the server's access level or alias never reaches the database layer and is not audited.
+
+The line holds names and counts only: never SQL text, bind values, result rows, or tokens. Any
+character other than a letter, digit, or one of `.$#@-` in a name, including the caller-supplied
+`database`, is shown as `?`. The line carries no MCP client identity, because the host does not
+pass a verified one.

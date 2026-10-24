@@ -12,6 +12,10 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - `sql-safe-mcp --verify-pii-rules [--strict]` connects to each `all_pii_safe` alias, reports how
   many tables and columns every PII rule matches, and warns about rules that match nothing
   (exit 2 with `--strict`) and about unprotected columns whose names look personal.
+- `logging.audit: true` writes one `sql_safe_mcp.audit` line per `execute_sql` call with the server,
+  database, tables and columns read, protected column count, row count, truncation, and elapsed
+  time (or the error `code`). It never contains SQL, bind values, rows, or tokens. Off by default;
+  the tool response is unchanged.
 
 ### Security
 

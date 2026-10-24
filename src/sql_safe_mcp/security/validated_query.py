@@ -42,7 +42,17 @@ class ValidatedQuery:
     constructor, and the object cannot be copied or serialized. `repr` never shows SQL or binds.
     """
 
-    __slots__ = ("_alias", "_ast", "_database", "_max_rows", "_outputs", "_parameters", "_sql")
+    __slots__ = (
+        "_alias",
+        "_ast",
+        "_database",
+        "_max_rows",
+        "_outputs",
+        "_parameters",
+        "_references",
+        "_sql",
+        "_tables",
+    )
 
     def __init__(
         self,
@@ -55,6 +65,8 @@ class ValidatedQuery:
         parameters: tuple[Any, ...],
         outputs: tuple[OutputPlan, ...],
         max_rows: int,
+        references: tuple[SourceColumn, ...] = (),
+        tables: tuple[tuple[str, str], ...] = (),
     ) -> None:
         if seal is not _SEAL:
             raise TypeError("ValidatedQuery can only be issued by the validation pipeline")
@@ -64,6 +76,8 @@ class ValidatedQuery:
         object.__setattr__(self, "_sql", sql)
         object.__setattr__(self, "_parameters", tuple(parameters))
         object.__setattr__(self, "_outputs", outputs)
+        object.__setattr__(self, "_references", references)
+        object.__setattr__(self, "_tables", tables)
         object.__setattr__(self, "_max_rows", max_rows)
 
     def __setattr__(self, name: str, value: object) -> NoReturn:
@@ -107,6 +121,16 @@ class ValidatedQuery:
     @property
     def outputs(self) -> tuple[OutputPlan, ...]:
         return self._outputs
+
+    @property
+    def references(self) -> tuple[SourceColumn, ...]:
+        """Every source column the query reads, including those in conditions and joins."""
+        return self._references
+
+    @property
+    def tables(self) -> tuple[tuple[str, str], ...]:
+        """Reflected `(schema, table)` names the query reads."""
+        return self._tables
 
     @property
     def max_rows(self) -> int:
@@ -175,6 +199,7 @@ def issue_validated_query(
     runtime: RuntimeConfig,
     limits: ParserLimits,
     dialect: SqlDialect = SQLSERVER,
+    tables: tuple[tuple[str, str], ...] = (),
 ) -> ValidatedQuery:
     """Rewrite tokens to binds, cap rows, re-validate, and generate SQL from the final AST.
 
@@ -205,5 +230,7 @@ def issue_validated_query(
         sql=sql,
         parameters=ordered,
         outputs=outputs,
+        references=tuple(ref.source for ref in analyzed.references),
+        tables=tables,
         max_rows=max_rows,
     )

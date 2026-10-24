@@ -50,6 +50,7 @@ class LoggingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    audit: bool = False
 
 
 class PiiRule(BaseModel):

@@ -90,12 +90,13 @@ class FakeCatalog:
         return typed(self.tables[(schema, table)])
 
 
-def _config() -> AppConfig:
+def _config(audit: bool = False) -> AppConfig:
     url = "mssql+pyodbc://user:p%40ss@sql/master?driver=x"
     return AppConfig.model_validate(
         {
             "version": 1,
             "runtime": {"default_max_rows": 3, "hard_max_rows": 5},
+            "logging": {"audit": audit},
             "servers": {
                 "plain": {"engine": "sqlserver", "connection_url": url},
                 "code": {
@@ -146,10 +147,11 @@ def make(
     rows: Sequence[tuple[Any, ...]] = (),
     keys: Sequence[str] = ("Id",),
     error: Exception | None = None,
+    audit: bool = False,
 ) -> tuple[DatabaseService, FakeRegistry]:
     registry = FakeRegistry(FakeConnection(FakeResult(keys, rows), error))
     service = DatabaseService(
-        _config(),
+        _config(audit),
         cast(EngineRegistry, registry),
         catalog_factory=lambda connection, alias, database: FakeCatalog(),
     )
@@ -284,12 +286,107 @@ CANARY = "canary.person@example.org"
 def test_execute_sql_failures_never_log_driver_message_text(
     driver: Exception, caplog: pytest.LogCaptureFixture
 ) -> None:
-    service, _ = make(error=driver)
+    service, _ = make(error=driver, audit=True)
     with caplog.at_level(logging.DEBUG):
         error = error_of(service, "SELECT Id FROM Users")
     assert CANARY not in caplog.text
     assert CANARY not in str(error)
     assert "message=" not in caplog.text
+    assert AUDIT_LOGGER in {record.name for record in caplog.records}
+
+
+AUDIT_LOGGER = "sql_safe_mcp.audit"
+
+
+def audit_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == AUDIT_LOGGER]
+
+
+def test_audit_line_names_objects_and_counts_without_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _ = make(
+        rows=[(1, "plain-person@example.org"), (2, None)], keys=["Id", "Email"], audit=True
+    )
+    token = CODEC.encrypt("bound-person@example.org")
+    sql = f"SELECT Id, Email FROM Users WHERE Name = 'n' AND Email = '{token}'"
+    with caplog.at_level(logging.INFO):
+        execute(service, sql)
+    (line,) = audit_lines(caplog)
+    assert re.fullmatch(
+        r"audit server=secure database=app tables=dbo\.Users "
+        r"columns=dbo\.Users\.Email,dbo\.Users\.Id,dbo\.Users\.Name protected=1 "
+        r"row_count=2 truncated=False elapsed_ms=\d+ reference=[0-9a-f]{32}",
+        line,
+    )
+    assert caplog.records[0].levelno == logging.INFO
+    for leaked in ("SELECT", "bound-person", "plain-person", "pii:v1", "'n'", token):
+        assert leaked not in caplog.text
+
+
+def test_audit_line_reports_a_table_without_referenced_columns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _ = make(rows=[(4,)], keys=["n"], audit=True)
+    with caplog.at_level(logging.INFO):
+        execute(service, "SELECT COUNT(*) AS n FROM Users")
+    (line,) = audit_lines(caplog)
+    assert " tables=dbo.Users columns=- protected=0 " in line
+
+
+def test_audit_line_marks_truncation(caplog: pytest.LogCaptureFixture) -> None:
+    service, _ = make(rows=[(i,) for i in range(20)], audit=True)
+    with caplog.at_level(logging.INFO):
+        execute(service, "SELECT Id FROM Users")
+    assert " row_count=3 truncated=True " in audit_lines(caplog)[0]
+
+
+def test_audit_is_off_by_default(caplog: pytest.LogCaptureFixture) -> None:
+    service, _ = make(rows=[(1,)])
+    with caplog.at_level(logging.DEBUG):
+        execute(service, "SELECT Id FROM Users")
+        error_of(service, "SELECT Id FROM Missing")
+    assert audit_lines(caplog) == []
+
+
+def test_audit_line_for_a_rejected_query_has_a_code_and_no_sql(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _ = make(audit=True)
+    with caplog.at_level(logging.INFO):
+        error = error_of(service, "SELECT Id FROM Users WHERE Email = 'plain-person@example.org'")
+    (line,) = audit_lines(caplog)
+    assert re.fullmatch(
+        r"audit server=secure database=app tables=- columns=- protected=- "
+        r"code=QUERY_REJECTED elapsed_ms=\d+ reference=[0-9a-f]{32}",
+        line,
+    )
+    assert error.code is ErrorCode.QUERY_REJECTED
+    assert "plain-person" not in caplog.text
+    assert "SELECT" not in line
+
+
+def test_audit_line_for_a_database_failure_keeps_the_objects_and_reference(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    driver = DBAPIError("stmt", (), Exception("[HYT00] Query timeout expired"))
+    service, _ = make(error=driver, audit=True)
+    with caplog.at_level(logging.INFO):
+        error = error_of(service, "SELECT Id FROM Users")
+    (line,) = audit_lines(caplog)
+    assert " tables=dbo.Users columns=dbo.Users.Id protected=0 code=TIMEOUT " in line
+    assert f"reference={error.correlation_id}" in line
+
+
+def test_audit_line_is_one_line_when_the_database_name_is_hostile(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _ = make(rows=[(1,)], audit=True)
+    with caplog.at_level(logging.INFO):
+        asyncio.run(service.execute_sql("secure", "app\nfake=1 x", "SELECT Id FROM Users"))
+    (line,) = audit_lines(caplog)
+    assert "\n" not in line
+    assert " database=app?fake?1?x " in line
 
 
 def test_other_operations_log_the_redacted_driver_message(

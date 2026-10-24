@@ -40,4 +40,5 @@ def validate_sql(
         runtime=runtime,
         limits=limits,
         dialect=dialect,
+        tables=tuple((table.schema, table.name) for table in tables),
     )

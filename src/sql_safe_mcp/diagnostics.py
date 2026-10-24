@@ -13,8 +13,10 @@ _QUOTED_LITERAL = re.compile(r"""(['"])(?:(?!\1).)*\1""", re.DOTALL)
 _LONG_DIGITS = re.compile(r"\d{6,}")
 
 
-def configure_logging(level: str) -> None:
+def configure_logging(level: str, audit: bool = False) -> None:
     logging.getLogger("sql_safe_mcp").setLevel(level)
+    # The audit trail is INFO, so it must survive a WARNING or ERROR package level.
+    logging.getLogger("sql_safe_mcp.audit").setLevel(logging.INFO if audit else logging.NOTSET)
     # SQLAlchemy inherits the root level and would echo statements with bind values at DEBUG.
     logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
 

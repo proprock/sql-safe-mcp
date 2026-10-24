@@ -329,6 +329,36 @@ def test_execute_sql_driver_error_values_reach_neither_the_tool_error_nor_the_lo
     assert canary not in caplog.text
 
 
+def test_execute_sql_audit_line_reaches_the_log_without_changing_the_response(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    _patch_database(monkeypatch, _Connection())
+    config = _secure_config().model_copy(
+        update={"logging": LoggingConfig(level="ERROR", audit=True)}
+    )
+    content: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        async with Client(create_server(config), raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "execute_sql",
+                {"server": "secure", "database": "app", "sql": "SELECT Id, Email FROM Users"},
+            )
+            assert result.structured_content is not None
+            content.update(result.structured_content)
+
+    with caplog.at_level(logging.INFO, logger="sql_safe_mcp.audit"):
+        asyncio.run(scenario())
+    (line,) = [r.getMessage() for r in caplog.records if r.name == "sql_safe_mcp.audit"]
+    assert line.startswith(
+        "audit server=secure database=app tables=dbo.Users "
+        "columns=dbo.Users.Email,dbo.Users.Id protected=1 row_count=1 truncated=False "
+    )
+    assert "a@b.c" not in caplog.text
+    assert set(content) == {"columns", "rows", "row_count", "truncated"}
+    logging.getLogger("sql_safe_mcp.audit").setLevel(logging.NOTSET)
+
+
 def test_execute_sql_output_schema_is_typed(monkeypatch: Any) -> None:
     async def scenario() -> None:
         async with Client(create_server(_secure_config()), raise_exceptions=True) as client:

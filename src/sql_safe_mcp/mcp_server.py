@@ -48,7 +48,7 @@ def create_server(config: AppConfig) -> MCPServer[AppContext]:
         finally:
             registry.dispose()
 
-    configure_logging(config.logging.level)
+    configure_logging(config.logging.level, config.logging.audit)
     server: MCPServer[AppContext] = MCPServer(
         "sql-safe-mcp",
         description="Minimal, read-only, PII-safe SQL database navigation.",

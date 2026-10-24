@@ -152,3 +152,14 @@ def test_configure_logging_sets_package_level_and_pins_sqlalchemy(
     engine.dispose()
     assert not [record for record in caplog.records if record.name.startswith("sqlalchemy")]
     assert "pii-plaintext" not in caplog.text
+
+
+def test_configure_logging_keeps_the_audit_trail_below_a_quiet_package_level() -> None:
+    audit = logging.getLogger("sql_safe_mcp.audit")
+
+    configure_logging("ERROR", audit=True)
+    assert audit.isEnabledFor(logging.INFO)
+
+    configure_logging("ERROR")
+    assert not audit.isEnabledFor(logging.INFO)
+    configure_logging("INFO")
