@@ -290,6 +290,48 @@ def test_returned_tokens_round_trip_and_are_alias_bound_on_three_engines(
     asyncio.run(scenario())
 
 
+def test_token_domains_are_enforced_on_three_engines(
+    live_database: LiveDatabase,
+    live_mysql_only: LiveMySql,
+    live_mariadb_only: LiveMySql,
+) -> None:
+    cases = _cases(live_database, live_mysql_only, live_mariadb_only)
+    config = _combined(live_database, live_mysql_only, live_mariadb_only)
+    for case in cases:
+        server = config.servers[case.secure]
+        assert server.pii is not None
+        rules = [rule.model_copy(update={"domain": "contact"}) for rule in server.pii.rules]
+        config.servers[case.secure] = server.model_copy(
+            update={"pii": server.pii.model_copy(update={"rules": rules})}
+        )
+
+    async def run(client: Client, case: EngineCase, sql: str) -> Any:
+        return await client.call_tool(
+            "execute_sql",
+            {"server": case.secure, "database": case.sql_database, "sql": sql},
+        )
+
+    async def scenario() -> None:
+        async with Client(create_server(config), raise_exceptions=True) as client:
+            for case in cases:
+                issued = await run(client, case, case.issue_query)
+                assert issued.is_error is False, _text(issued)
+                token = issued.structured_content["rows"][0][0]
+                codec = TokenCodec(case.secure, case.key)
+                assert codec.decrypt(token, "contact") == case.email
+
+                accepted = await run(client, case, case.query.format(token=token))
+                assert accepted.is_error is False, _text(accepted)
+                assert accepted.structured_content["rows"] == [[1]]
+
+                for foreign in (codec.encrypt(case.email), codec.encrypt(case.email, "money")):
+                    rejected = await run(client, case, case.query.format(token=foreign))
+                    assert rejected.is_error is True
+                    assert "INVALID_PII_TOKEN" in _text(rejected)
+
+    asyncio.run(scenario())
+
+
 def test_live_shared_pii_rules_apply_only_after_config_resolution(
     live_database: LiveDatabase,
     live_mysql_only: LiveMySql,
