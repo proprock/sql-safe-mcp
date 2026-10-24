@@ -7,7 +7,7 @@ import pytest
 from sqlglot import exp
 from typed_columns import typed
 
-from sql_safe_mcp.config import PiiConfig, PiiRule
+from sql_safe_mcp.config import PiiConfig, PiiRule, PiiScopeRule
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.dialect import SQLSERVER
 from sql_safe_mcp.security.lineage import SourceColumn, analyze_query
@@ -302,3 +302,87 @@ def test_forged_token_keeps_priority_over_the_type_check() -> None:
     with pytest.raises(DomainError) as info:
         evaluate_typed(f"SELECT Id FROM Facts WHERE Visits = {token(7, FOREIGN)}")
     assert info.value.code is ErrorCode.INVALID_PII_TOKEN
+
+
+DENY_CONFIG = PiiConfig(
+    mode="deny-by-default",
+    exposed_columns=[PiiScopeRule(table="Users", columns=["Id"])],
+    deny=[
+        PiiScopeRule(table="Contacts", columns=["*"]),
+        PiiScopeRule(table="Users", columns=["Phone"]),
+    ],
+)
+
+
+def evaluate_deny(sql: str, config: PiiConfig = DENY_CONFIG) -> PolicyDecision:
+    query = parse_select(sql, LIMITS)
+    analyzed = analyze_query(query, resolve_tables(query, Catalog()), LIMITS, SQLSERVER)
+    return PiiPolicy("sales", config, CODEC).evaluate(analyzed)
+
+
+def test_deny_by_default_protects_unlisted_and_exposes_listed_columns() -> None:
+    assert evaluate_deny("SELECT Id, Email, Name FROM Users").protected == (False, True, True)
+    assert evaluate_deny("SELECT Total FROM Orders").protected == (True,)
+
+
+def test_deny_by_default_star_tokenizes_unlisted_columns() -> None:
+    decision = evaluate_deny(
+        "SELECT * FROM Users",
+        PiiConfig(
+            mode="deny-by-default", exposed_columns=[PiiScopeRule(table="Users", columns=["Id"])]
+        ),
+    )
+    assert decision.protected == (False, True, True, True)
+
+
+def test_protect_mode_ignores_exposed_columns() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        exposed_columns=[PiiScopeRule(table="Users", columns=["Email"])],
+    )
+    assert evaluate_deny("SELECT Email FROM Users", config).protected == (True,)
+
+
+def test_exposed_columns_match_database_schema_and_table_pattern() -> None:
+    config = PiiConfig(
+        mode="deny-by-default",
+        exposed_columns=[
+            PiiScopeRule(database="other", schema="dbo", table="Us*", columns=["Name"])
+        ],
+    )
+    assert evaluate_deny("SELECT Name FROM Users", config).protected == (True,)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT Phone FROM Users",
+        "SELECT Phone AS p FROM Users",
+        "SELECT Id FROM Users WHERE Phone = 'x'",
+        "SELECT Id FROM Users ORDER BY Phone",
+        "SELECT u.Id FROM Users u JOIN Contacts c ON c.Id = u.Id",
+        "SELECT * FROM Users",
+        "SELECT u.* FROM Users u",
+        "SELECT * FROM Contacts",
+        "SELECT Id FROM Contacts WHERE Id = 1",
+    ],
+)
+def test_denied_column_is_rejected_in_every_position(sql: str) -> None:
+    with pytest.raises(DomainError) as info:
+        evaluate_deny(sql)
+    assert info.value.code is ErrorCode.QUERY_REJECTED
+    assert Reason.COLUMN_DENIED.value in info.value.public_message
+
+
+def test_deny_takes_priority_over_protection_rules() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        deny=[PiiScopeRule(table="Users", columns=["Email"])],
+    )
+    with pytest.raises(DomainError) as info:
+        evaluate_deny("SELECT Email FROM Users", config)
+    assert Reason.COLUMN_DENIED.value in info.value.public_message
+
+
+def test_count_star_does_not_reference_denied_columns() -> None:
+    assert evaluate_deny("SELECT COUNT(*) FROM Contacts").protected == (False,)

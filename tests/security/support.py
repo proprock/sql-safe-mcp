@@ -13,7 +13,7 @@ from typing import Any, ClassVar, cast
 from hypothesis import strategies as st
 from typed_columns import typed
 
-from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, RuntimeConfig
+from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, PiiScopeRule, RuntimeConfig
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.security.dialect import SQLSERVER, SqlDialect
 from sql_safe_mcp.security.pipeline import validate_sql
@@ -33,7 +33,8 @@ PII = PiiConfig(
     rules=[
         PiiRule(database="*", schema="dbo", table="Users", columns=["Email", "Phone"]),
         PiiRule(database=DATABASE, schema="dbo", table="Orders", columns=["Total"]),
-    ]
+    ],
+    deny=[PiiScopeRule(schema="dbo", table="Contacts", columns=["*"])],
 )
 
 
@@ -90,7 +91,8 @@ def app_config() -> AppConfig:
                         "table": "Orders",
                         "columns": ["Total"],
                     },
-                ]
+                ],
+                "deny": [{"schema": "dbo", "table": "Contacts", "columns": ["*"]}],
             },
         }
 

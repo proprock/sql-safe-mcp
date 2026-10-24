@@ -163,6 +163,18 @@ def _secure_config() -> AppConfig:
                         ]
                     },
                 },
+                "peds": {
+                    "engine": "sqlserver",
+                    "access_level": "all_pii_safe",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "pii_key_env": "PK",
+                    "pii_key": base64.b64encode(bytes(range(1, 33))).decode(),
+                    "pii": {
+                        "mode": "deny-by-default",
+                        "exposed_columns": [{"table": "Users", "columns": ["Id"]}],
+                        "deny": [{"table": "Audit", "columns": ["*"]}],
+                    },
+                },
             },
         }
     )
@@ -199,7 +211,7 @@ class _Connection:
 
 class _Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
-        return [("dbo", "Users")]
+        return [("dbo", "Users"), ("dbo", "Audit")]
 
     def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
         return typed(["Id", "Email"])
@@ -261,6 +273,39 @@ def test_execute_sql_returns_structured_result_with_tokens(monkeypatch: Any) -> 
             assert "a@b.c" not in str(content)
 
     asyncio.run(scenario())
+
+
+def test_deny_by_default_alias_tokenizes_every_unlisted_column(monkeypatch: Any) -> None:
+    connection = _Connection()
+    _patch_database(monkeypatch, connection)
+
+    async def scenario() -> None:
+        async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "execute_sql",
+                {"server": "peds", "database": "app", "sql": "SELECT * FROM Users"},
+            )
+            assert result.is_error is False
+            content = result.structured_content
+            assert content is not None
+            assert [(c["name"], c["encoding"]) for c in content["columns"]] == [
+                ("Id", "json"),
+                ("Email", "token"),
+            ]
+            assert content["rows"][0][1].startswith("pii:v1:")
+            assert "a@b.c" not in str(content)
+
+            denied = await client.call_tool(
+                "execute_sql",
+                {"server": "peds", "database": "app", "sql": "SELECT Id FROM Audit"},
+            )
+            assert denied.is_error is True
+            text = denied.content[0]
+            assert isinstance(text, TextContent)
+            assert "a denied column cannot be referenced" in text.text
+
+    asyncio.run(scenario())
+    assert len(connection.calls) == 1
 
 
 def test_execute_sql_denied_for_metadata_and_meta_and_code_aliases(monkeypatch: Any) -> None:

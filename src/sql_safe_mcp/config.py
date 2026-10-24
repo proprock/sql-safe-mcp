@@ -73,10 +73,35 @@ class PiiRule(BaseModel):
         return self
 
 
+class PiiScopeRule(PiiRule):
+    """An `exposed_columns` or `deny` entry; the database defaults to any."""
+
+    database: str = Field(default="*", min_length=1)
+
+
+def _check_column_wildcards(
+    rules: list[PiiRule], exposed: list[PiiScopeRule], deny: list[PiiScopeRule]
+) -> None:
+    if any("*" in column for rule in [*rules, *exposed] for column in rule.columns):
+        raise ValueError("pii rules and exposed_columns cannot list '*' columns; only deny can")
+    if any("*" in column and rule.columns != ["*"] for rule in deny for column in rule.columns):
+        raise ValueError("a deny column wildcard must be exactly ['*']")
+
+
 class PiiConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    rules: list[PiiRule] = Field(min_length=1)
+    mode: Literal["protect", "deny-by-default"] = "protect"
+    rules: list[PiiRule] = Field(default_factory=list)
+    exposed_columns: list[PiiScopeRule] = Field(default_factory=list)
+    deny: list[PiiScopeRule] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> PiiConfig:
+        _check_column_wildcards(self.rules, self.exposed_columns, self.deny)
+        if self.mode == "protect" and not (self.rules or self.deny):
+            raise ValueError("pii requires at least one rule or deny entry")
+        return self
 
 
 class PiiConfigInput(BaseModel):
@@ -84,15 +109,26 @@ class PiiConfigInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    mode: Literal["protect", "deny-by-default"] = "protect"
     include: list[str] = Field(default_factory=list)
     rules: list[PiiRule] = Field(default_factory=list)
+    exposed_columns: list[PiiScopeRule] = Field(default_factory=list)
+    deny: list[PiiScopeRule] = Field(default_factory=list)
 
 
 class PiiRuleSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, pattern=rf"^{_SERVER_ALIAS_PATTERN}$")
-    rules: list[PiiRule] = Field(min_length=1)
+    rules: list[PiiRule] = Field(default_factory=list)
+    exposed_columns: list[PiiScopeRule] = Field(default_factory=list)
+    deny: list[PiiScopeRule] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> PiiRuleSet:
+        if not (self.rules or self.exposed_columns or self.deny):
+            raise ValueError("a pii rule set needs rules, exposed_columns or deny")
+        return self
 
 
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
@@ -228,17 +264,17 @@ def _validation_summary(error: ValidationError) -> str:
 def _resolve_pii_rules(raw: dict[object, object], config: AppConfigInput) -> dict[object, object]:
     """Flatten shared PII rules before runtime configuration is constructed."""
 
-    default_rules: list[PiiRule] = []
-    named_rules: dict[str, list[PiiRule]] = {}
+    default_set: PiiRuleSet | None = None
+    named_sets: dict[str, PiiRuleSet] = {}
     for rule_set in config.pii_rules or []:
         if rule_set.name is None:
-            if default_rules:
+            if default_set is not None:
                 raise ValueError("at most one unnamed pii rule set is allowed")
-            default_rules = rule_set.rules
+            default_set = rule_set
             continue
-        if rule_set.name in named_rules:
+        if rule_set.name in named_sets:
             raise ValueError(f"duplicate pii rule set name {rule_set.name!r}")
-        named_rules[rule_set.name] = rule_set.rules
+        named_sets[rule_set.name] = rule_set
 
     resolved = deepcopy(raw)
     resolved.pop("pii_rules", None)
@@ -254,23 +290,30 @@ def _resolve_pii_rules(raw: dict[object, object], config: AppConfigInput) -> dic
                 )
             continue
 
-        effective_rules = list(default_rules)
-        if server.pii is not None:
+        sets: list[PiiRuleSet | PiiConfigInput] = [default_set] if default_set is not None else []
+        mode = "protect"
+        local = server.pii
+        if local is not None:
+            mode = local.mode
             included: set[str] = set()
-            for name in server.pii.include:
-                if name not in named_rules:
+            for name in local.include:
+                if name not in named_sets:
                     raise ValueError(f"server {alias!r} includes unknown pii rule set {name!r}")
                 if name in included:
                     raise ValueError(
                         f"server {alias!r} includes pii rule set {name!r} more than once"
                     )
                 included.add(name)
-                effective_rules.extend(named_rules[name])
-            effective_rules.extend(server.pii.rules)
+                sets.append(named_sets[name])
+            sets.append(local)
+        merged = {
+            field: [
+                rule.model_dump(by_alias=True) for item in sets for rule in getattr(item, field)
+            ]
+            for field in ("rules", "exposed_columns", "deny")
+        }
         server_data["pii"] = (
-            {"rules": [rule.model_dump(by_alias=True) for rule in effective_rules]}
-            if effective_rules
-            else None
+            {"mode": mode, **merged} if any(merged.values()) or mode != "protect" else None
         )
     return resolved
 

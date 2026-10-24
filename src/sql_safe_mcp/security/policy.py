@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -8,7 +9,7 @@ from uuid import UUID
 
 from sqlglot import exp
 
-from sql_safe_mcp.config import PiiConfig
+from sql_safe_mcp.config import PiiConfig, PiiRule
 from sql_safe_mcp.security.lineage import AnalyzedQuery, ColumnRef, SourceColumn
 from sql_safe_mcp.security.parser import reject
 from sql_safe_mcp.security.reasons import Reason
@@ -53,22 +54,35 @@ class PiiPolicy:
         self._config = config
         self._codec = codec
 
-    def is_protected(self, source: SourceColumn) -> bool:
+    def _matches(self, rules: Sequence[PiiRule], source: SourceColumn) -> bool:
         schema = source.schema.casefold()
         table = source.table.casefold()
         column = source.column.casefold()
-        for rule in self._config.rules:
+        for rule in rules:
             if rule.database != "*" and rule.database.casefold() != self._database:
                 continue
             if rule.schema_ is not None and rule.schema_.casefold() != schema:
                 continue
-            if fnmatchcase(table, rule.table.casefold()) and column in {
-                item.casefold() for item in rule.columns
-            }:
+            if fnmatchcase(table, rule.table.casefold()) and (
+                rule.columns == ["*"] or column in {item.casefold() for item in rule.columns}
+            ):
                 return True
         return False
 
+    def is_denied(self, source: SourceColumn) -> bool:
+        return self._matches(self._config.deny, source)
+
+    def is_protected(self, source: SourceColumn) -> bool:
+        if self._matches(self._config.rules, source):
+            return True
+        return self._config.mode == "deny-by-default" and not self._matches(
+            self._config.exposed_columns, source
+        )
+
     def evaluate(self, analyzed: AnalyzedQuery) -> PolicyDecision:
+        for ref in analyzed.references:
+            if self.is_denied(ref.source):
+                raise reject(Reason.COLUMN_DENIED)
         sites: list[TokenSite] = []
         for ref in analyzed.references:
             if self.is_protected(ref.source):

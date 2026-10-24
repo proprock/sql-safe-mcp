@@ -857,3 +857,98 @@ servers:
     config = load_config(_write(tmp_path, text), env)
 
     assert make_url(config.servers["dev"].connection_url.get_secret_value()).port == 1433
+
+
+_DENY_ENV = {"URL": "mssql+pyodbc://u:p@peds/master?driver=x", "KEY": _key(7)}
+
+
+def _peds_config(pii: str, shared: str = "") -> str:
+    return f"""
+version: 1
+{shared}
+servers:
+  peds:
+    engine: sqlserver
+    access_level: all_pii_safe
+    connection_url: ${{URL}}
+    pii_key_env: KEY
+    pii:
+{pii}
+"""
+
+
+def test_pii_mode_defaults_to_protect(tmp_path: Path) -> None:
+    text = _peds_config('      rules: [{database: "*", table: Users, columns: [Email]}]')
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert (pii.mode, pii.exposed_columns, pii.deny) == ("protect", [], [])
+
+
+def test_deny_by_default_alias_loads_without_database_on_exposed_and_deny(tmp_path: Path) -> None:
+    text = _peds_config(
+        """      mode: deny-by-default
+      exposed_columns:
+        - {table: Visits, columns: [VisitId, DepartmentCode]}
+      deny:
+        - {table: "*", columns: [Notes, Anamnesis]}
+        - {table: Attachments, columns: ["*"]}"""
+    )
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert pii.mode == "deny-by-default"
+    assert pii.rules == []
+    assert [rule.database for rule in pii.exposed_columns + pii.deny] == ["*", "*", "*"]
+    assert pii.deny[1].columns == ["*"]
+
+
+@pytest.mark.parametrize(
+    "pii",
+    [
+        '      rules: [{table: Users, columns: ["*"]}]',
+        '      mode: deny-by-default\n      exposed_columns: [{table: Users, columns: ["*"]}]',
+        "      mode: allow-all",
+        "      exposed_columns: []",
+    ],
+)
+def test_invalid_deny_shapes_are_config_errors(tmp_path: Path, pii: str) -> None:
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, _peds_config(pii)), _DENY_ENV)
+
+
+def test_deny_by_default_is_only_for_all_pii_safe_servers(tmp_path: Path) -> None:
+    text = """
+version: 1
+servers:
+  meta:
+    engine: sqlserver
+    connection_url: ${URL}
+    pii:
+      mode: deny-by-default
+"""
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, text), _DENY_ENV)
+
+
+def test_shared_rule_sets_carry_deny_and_exposed_columns(tmp_path: Path) -> None:
+    shared = """pii_rules:
+  - deny: [{table: "*", columns: [Notes]}]
+  - name: visits
+    exposed_columns: [{table: Visits, columns: [VisitId]}]
+    deny: [{table: Attachments, columns: ["*"]}]"""
+    text = _peds_config(
+        """      mode: deny-by-default
+      include: [visits]
+      deny: [{table: Secrets, columns: ["*"]}]""",
+        shared,
+    )
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert pii.mode == "deny-by-default"
+    assert [rule.table for rule in pii.deny] == ["*", "Attachments", "Secrets"]
+    assert [rule.table for rule in pii.exposed_columns] == ["Visits"]

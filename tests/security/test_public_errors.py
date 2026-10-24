@@ -97,10 +97,16 @@ def test_unsupported_constructs_name_the_offender(sql: str, expected: str) -> No
         ("SELECT Id FROM Users WHERE Email = 'plain'", Reason.PROTECTED_NEEDS_TOKEN),
         ("SELECT Id FROM Users WHERE Name = 'pii:v1:AAAA'", Reason.TOKEN_OUTSIDE_PROTECTED),
         (f"SELECT Id FROM Users WHERE Email = '{OWN.encrypt(1)}'", Reason.TOKEN_TYPE_MISMATCH),
+        ("SELECT Email FROM Contacts", Reason.COLUMN_DENIED),
+        ("SELECT * FROM Contacts", Reason.COLUMN_DENIED),
     ],
 )
 def test_reasons_are_reported_verbatim(sql: str, reason: Reason) -> None:
     assert message_of(sql) == f"Query rejected: {reason.value}."
+
+
+def test_column_denied_text_is_pinned() -> None:
+    assert Reason.COLUMN_DENIED.value == "a denied column cannot be referenced"
 
 
 def test_limits_are_reported_verbatim() -> None:

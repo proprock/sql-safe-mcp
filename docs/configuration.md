@@ -303,6 +303,48 @@ pii:
       columns: [email, EMAIL]  # duplicate column
 ```
 
+### Deny-by-default mode and the `deny` list
+
+By default (`pii.mode: protect`) only columns listed in `pii.rules` are protected. For data where
+an unlisted column is itself a risk (medical records, free-text notes), set
+`pii.mode: deny-by-default`. Then every column is protected (returned as a token, compared only
+with tokens) unless `pii.exposed_columns` lists it; `SELECT *` returns tokens for the unlisted
+columns rather than an error. `pii.rules` still protect columns and `pii.exposed_columns` has no
+effect in `protect` mode. Configurations without `mode` behave as before.
+
+`pii.deny` lists columns that cannot be referenced at all, even as tokens: any use in a
+projection, `WHERE`, `ORDER BY`, `JOIN`, or a `*` expansion is rejected with `QUERY_REJECTED`
+and the reason "a denied column cannot be referenced". `deny` wins over `rules` and
+`exposed_columns`. `COUNT(*)` does not reference columns, so it is unaffected.
+
+`exposed_columns` and `deny` entries use the `database`, `schema`, `table`, and `columns` keys
+described above, except that `database` is optional and defaults to `"*"`. `columns: ["*"]` is
+allowed only in `deny` and denies every column of the matching tables. A server using
+`deny-by-default` must be `all_pii_safe`. `include`d shared sets contribute `rules`,
+`exposed_columns`, and `deny` in the same order as `rules`; `mode` is set per alias only.
+
+A deny-by-default alias for a pediatric database:
+
+```yaml
+servers:
+  peds_ro:
+    engine: sqlserver
+    access_level: all_pii_safe
+    connection_url: "${PEDS_SQL_URL}"
+    pii_key_env: PEDS_PII_KEY
+    pii:
+      mode: deny-by-default
+      exposed_columns: # open columns; everything else is a token
+        - table: Visits
+          columns: [VisitId, DepartmentCode, VisitYear]
+      deny: # unreachable even as a token
+        - table: "*"
+          columns: [Notes, Anamnesis, Attachment]
+```
+
+The database login should additionally carry column-level `DENY` on free-text columns; this
+setting is defense in depth, not a replacement for database permissions.
+
 ### Shared PII rule sets
 
 Top-level `pii_rules` is optional. If present, it is a non-empty sequence of strict groups with a

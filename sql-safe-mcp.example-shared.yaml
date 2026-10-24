@@ -65,6 +65,21 @@ servers:
           table: Cards
           columns: [HolderName]
 
+  peds-deny-by-default:
+    engine: sqlserver
+    access_level: all_pii_safe
+    connection_url: "${PEDS_SQL_URL}"
+    pii_key_env: PEDS_PII_KEY
+    pii:
+      # `deny-by-default` protects every column that exposed_columns does not list.
+      mode: deny-by-default
+      exposed_columns: # `database` is optional here and defaults to "*".
+        - table: Visits
+          columns: [VisitId, DepartmentCode, VisitYear]
+      deny: # Unreachable even as a token; columns: ["*"] denies a whole table.
+        - table: "*"
+          columns: [Notes, Anamnesis, Attachment]
+
   reporting-metadata:
     engine: sqlserver
     access_level: metadata
