@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -459,6 +460,7 @@ def test_live_deny_by_default_and_deny_list_on_three_engines(
         }
         servers[f"{alias}_deny"] = {
             **base,
+            "pii_key_env": f"{key_name}_DENY",
             "pii": {
                 "mode": "deny-by-default",
                 "deny": [{"table": tables[alias], "columns": [email_columns[alias]]}],
@@ -471,6 +473,8 @@ def test_live_deny_by_default_and_deny_list_on_three_engines(
         "MATRIX_MYSQL_KEY": live_mysql_only.key,
         "MATRIX_MARIA_KEY": live_mariadb_only.key,
     }
+    # Keys must be unique per alias, so each *_deny alias gets a key derived from its sibling's.
+    keys |= {f"{name}_DENY": hashlib.sha256(key).digest() for name, key in keys.items()}
     config = load_config(path, {name: base64.b64encode(key).decode() for name, key in keys.items()})
     databases = {
         "mssql": live_database.database,
@@ -501,7 +505,9 @@ def test_live_deny_by_default_and_deny_list_on_three_engines(
                 assert ok.is_error is False, _text(ok)
                 content = ok.structured_content
                 assert [column["encoding"] for column in content["columns"]] == ["json", "token"]
-                assert all(row[1].startswith("pii:v1:") for row in content["rows"])
+                cells = [row[1] for row in content["rows"] if row[1] is not None]  # NULL stays null
+                assert cells
+                assert all(cell.startswith("pii:v1:") for cell in cells)
 
                 denied = await client.call_tool(
                     "execute_sql",

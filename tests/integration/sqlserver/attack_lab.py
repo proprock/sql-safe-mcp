@@ -22,7 +22,14 @@ from pydantic import SecretStr
 from sqlalchemy import Connection, Engine, create_engine, event, text
 from sqlalchemy.engine import URL, make_url
 
-from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, RuntimeConfig, ServerConfig
+from sql_safe_mcp.config import (
+    AppConfig,
+    PiiConfig,
+    PiiRule,
+    PiiScopeRule,
+    RuntimeConfig,
+    ServerConfig,
+)
 from sql_safe_mcp.db import registry as registry_module
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.service import DatabaseService
@@ -176,7 +183,8 @@ def _pii_server(url: str, key: bytes, key_env: str, databases: tuple[str, str]) 
                 PiiRule(database="*", schema="dbo", table="Users", columns=["Email", "Phone"]),
                 PiiRule(database="*", schema="dbo", table="Visits", columns=["Hits"]),
                 PiiRule(database=databases[0], schema="dbo", table="Orders", columns=["Total"]),
-            ]
+            ],
+            deny=[PiiScopeRule(schema="dbo", table="Contacts", columns=["*"])],
         ),
         pii_key=SecretStr(base64.b64encode(key).decode()),
     )
