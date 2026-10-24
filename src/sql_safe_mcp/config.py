@@ -181,7 +181,8 @@ class ServerConfig(ServerConfigBase):
         if self.access_level == "all_pii_safe":
             if not self.pii_key_env or self.pii is None:
                 raise ValueError("all_pii_safe servers require pii_key_env and pii rules")
-            if self.engine != "sqlserver" and any(rule.schema_ for rule in self.pii.rules):
+            scoped = [*self.pii.rules, *self.pii.exposed_columns, *self.pii.deny]
+            if self.engine != "sqlserver" and any(rule.schema_ for rule in scoped):
                 raise ValueError(f"pii rules for engine {self.engine!r} cannot set schema")
         elif self.pii_key_env is not None or self.pii is not None:
             raise ValueError(

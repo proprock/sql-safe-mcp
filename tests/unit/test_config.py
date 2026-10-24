@@ -919,6 +919,25 @@ def test_invalid_deny_shapes_are_config_errors(tmp_path: Path, pii: str) -> None
         load_config(_write(tmp_path, _peds_config(pii)), _DENY_ENV)
 
 
+@pytest.mark.parametrize("section", ["exposed_columns", "deny"])
+def test_mysql_exposed_and_deny_rules_cannot_set_schema(tmp_path: Path, section: str) -> None:
+    text = f"""
+version: 1
+servers:
+  m:
+    engine: mysql
+    access_level: all_pii_safe
+    connection_url: ${{URL}}
+    pii_key_env: KEY
+    pii:
+      mode: deny-by-default
+      {section}: [{{schema: dbo, table: people, columns: [email]}}]
+"""
+    env = {**_DENY_ENV, "URL": "mysql+pymysql://u:p@h/db"}
+    with pytest.raises(DomainError, match="cannot set schema"):
+        load_config(_write(tmp_path, text), env)
+
+
 def test_deny_by_default_is_only_for_all_pii_safe_servers(tmp_path: Path) -> None:
     text = """
 version: 1
