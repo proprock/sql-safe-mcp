@@ -60,6 +60,7 @@ class PiiRule(BaseModel):
     schema_: str | None = Field(default=None, alias="schema")
     table: str = Field(min_length=1)
     columns: list[str] = Field(min_length=1)
+    domain: str | None = Field(default=None, pattern=rf"^{_SERVER_ALIAS_PATTERN}$")
 
     @model_validator(mode="after")
     def validate_wildcards(self) -> PiiRule:
@@ -77,6 +78,12 @@ class PiiScopeRule(PiiRule):
     """An `exposed_columns` or `deny` entry; the database defaults to any."""
 
     database: str = Field(default="*", min_length=1)
+
+    @model_validator(mode="after")
+    def validate_no_domain(self) -> PiiScopeRule:
+        if self.domain is not None:
+            raise ValueError("domain is allowed only on pii rules")
+        return self
 
 
 def _check_column_wildcards(

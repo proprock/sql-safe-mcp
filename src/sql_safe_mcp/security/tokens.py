@@ -112,14 +112,20 @@ def _decode_value(tag: str, data: Any) -> Any:
 class TokenCodec:
     """AES-256-GCM tokens for one server alias; the alias is authenticated as AAD."""
 
-    __slots__ = ("_aad", "_aead", "_alias")
+    __slots__ = ("_aead", "_alias")
 
     def __init__(self, alias: str, key: bytes) -> None:
         if len(key) != _KEY_BYTES:
             raise ValueError(f"PII key must be {_KEY_BYTES} bytes")
         self._alias = alias
         self._aead = AESGCM(key)
-        self._aad = f"pii:v1\x00{alias}".encode()
+
+    def _aad(self, domain: str | None) -> bytes:
+        # The default domain is the alias itself and keeps the pre-domain AAD, so existing tokens
+        # stay valid.
+        if domain is None or domain == self._alias:
+            return f"pii:v1\x00{self._alias}".encode()
+        return f"pii:v1\x00{self._alias}\x00{domain}".encode()
 
     def __repr__(self) -> str:
         return f"TokenCodec(alias={self._alias!r})"
@@ -129,12 +135,12 @@ class TokenCodec:
         return self._alias
 
     @overload
-    def encrypt(self, value: None) -> None: ...
+    def encrypt(self, value: None, domain: str | None = None) -> None: ...
 
     @overload
-    def encrypt(self, value: object) -> str: ...
+    def encrypt(self, value: object, domain: str | None = None) -> str: ...
 
-    def encrypt(self, value: object) -> str | None:
+    def encrypt(self, value: object, domain: str | None = None) -> str | None:
         """Tokenize a scalar; NULL stays None. Unsupported values fail closed."""
         if value is None:
             return None
@@ -150,20 +156,20 @@ class TokenCodec:
         except (ValueError, OverflowError) as exc:
             raise _unsupported_value() from exc
         nonce = os.urandom(_NONCE_BYTES)
-        sealed = nonce + self._aead.encrypt(nonce, payload, self._aad)
+        sealed = nonce + self._aead.encrypt(nonce, payload, self._aad(domain))
         token = PREFIX + base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
         if len(token) > MAX_TOKEN_CHARS:
             raise _unsupported_value()
         return token
 
-    def decrypt(self, token: str) -> object:
+    def decrypt(self, token: str, domain: str | None = None) -> object:
         """Return the value; every failure raises the same INVALID_PII_TOKEN error."""
         try:
-            return self._decrypt(token)
+            return self._decrypt(token, domain)
         except Exception:
             raise _invalid_token() from None
 
-    def _decrypt(self, token: str) -> object:
+    def _decrypt(self, token: str, domain: str | None) -> object:
         if len(token) > MAX_TOKEN_CHARS or not token.startswith(PREFIX):
             raise ValueError
         body = token[len(PREFIX) :]
@@ -175,7 +181,7 @@ class TokenCodec:
         if len(raw) < _NONCE_BYTES + 16:
             raise ValueError
         nonce, sealed = raw[:_NONCE_BYTES], raw[_NONCE_BYTES:]
-        payload = self._aead.decrypt(nonce, sealed, self._aad)
+        payload = self._aead.decrypt(nonce, sealed, self._aad(domain))
         document = json.loads(payload.decode("utf-8"), parse_constant=_reject_constant)
         if not isinstance(document, dict) or set(document) not in ({"v", "t", "d"}, _PADDED_KEYS):
             raise ValueError

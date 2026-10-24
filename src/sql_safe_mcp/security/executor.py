@@ -106,7 +106,7 @@ def execute_validated(
                 if value is None:
                     cells.append(None)
                 elif plan.protected:
-                    cells.append(codec.encrypt(value))
+                    cells.append(codec.encrypt(value, plan.domain))
                 else:
                     encoded, encoding = _encode(value)
                     if encodings[index] not in (None, encoding):

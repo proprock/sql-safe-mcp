@@ -10,7 +10,9 @@ environment, host OS, configured database server, and credentials form the trust
 Database credentials remain the primary authorization control.
 
 PII protection covers only configured columns. Each `all_pii_safe` server alias has a unique AES-256
-key and a distinct authenticated token domain. Tokens are bearer secrets and must not be logged. The token payload is padded to a multiple of 32
+key and a distinct authenticated token domain. A `pii.rules` entry may set `domain` to narrow
+this: its tokens are then accepted only on columns of that domain, and any other use is an
+`INVALID_PII_TOKEN`. Tokens are bearer secrets and must not be logged. The token payload is padded to a multiple of 32
 bytes, so a token's length reveals only which 32-byte bucket the plaintext length falls in. That
 bucket remains a residual leak, and a long value (for example a free-text field) still discloses
 its approximate size. Tokens issued before padding existed stay valid.

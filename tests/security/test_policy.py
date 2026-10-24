@@ -191,9 +191,9 @@ def test_table_patterns_are_case_insensitive_full_matches(
         CODEC,
     )
 
-    assert policy.is_protected(SourceColumn("dbo", matching_table.lower(), "email"))
-    assert not policy.is_protected(SourceColumn("dbo", other_table, "email"))
-    assert not policy.is_protected(SourceColumn("dbo", matching_table, "phone"))
+    assert policy.protected_domain(SourceColumn("dbo", matching_table.lower(), "email")) == "srv"
+    assert policy.protected_domain(SourceColumn("dbo", other_table, "email")) is None
+    assert policy.protected_domain(SourceColumn("dbo", matching_table, "phone")) is None
 
 
 def test_token_sites_carry_decrypted_values_without_exposing_them_in_repr() -> None:
@@ -302,6 +302,90 @@ def test_forged_token_keeps_priority_over_the_type_check() -> None:
     with pytest.raises(DomainError) as info:
         evaluate_typed(f"SELECT Id FROM Facts WHERE Visits = {token(7, FOREIGN)}")
     assert info.value.code is ErrorCode.INVALID_PII_TOKEN
+
+
+DOMAIN_CONFIG = PiiConfig(
+    rules=[
+        PiiRule(database="*", table="Users", columns=["Email"], domain="contact"),
+        PiiRule(database="*", table="Users", columns=["Phone"], domain="contact"),
+        PiiRule(database="*", table="Orders", columns=["Total"], domain="money"),
+        PiiRule(database="*", table="Users", columns=["Name"]),
+    ]
+)
+
+
+def evaluate_domains(sql: str, config: PiiConfig = DOMAIN_CONFIG) -> PolicyDecision:
+    query = parse_select(sql, LIMITS)
+    analyzed = analyze_query(query, resolve_tables(query, Catalog()), LIMITS, SQLSERVER)
+    return PiiPolicy("sales", config, CODEC).evaluate(analyzed)
+
+
+def domain_token(value: object, domain: str | None) -> str:
+    return f"'{CODEC.encrypt(value, domain)}'"
+
+
+def test_decision_reports_the_domain_of_each_output() -> None:
+    decision = evaluate_domains("SELECT Id, Email, Name FROM Users")
+    assert decision.domains == (None, "contact", "srv")
+
+
+def test_token_is_accepted_within_its_domain() -> None:
+    decision = evaluate_domains(
+        f"SELECT Id FROM Users WHERE Email = {domain_token('a', 'contact')} "
+        f"OR Phone IN ({domain_token('b', 'contact')})"
+    )
+    assert [site.value for site in decision.token_sites] == ["a", "b"]
+
+
+def test_default_domain_token_is_accepted_for_a_rule_without_domain() -> None:
+    decision = evaluate_domains(f"SELECT Id FROM Users WHERE Name = {domain_token('n', None)}")
+    assert [site.value for site in decision.token_sites] == ["n"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        f"SELECT Id FROM Orders WHERE Total = {domain_token('x', 'contact')}",
+        f"SELECT Id FROM Users WHERE Email = {domain_token('x', 'money')}",
+        f"SELECT Id FROM Users WHERE Email = {domain_token('x', None)}",
+        f"SELECT Id FROM Users WHERE Name = {domain_token('x', 'contact')}",
+    ],
+)
+def test_token_of_another_domain_is_an_invalid_token(sql: str) -> None:
+    with pytest.raises(DomainError) as info:
+        evaluate_domains(sql)
+    assert info.value.code is ErrorCode.INVALID_PII_TOKEN
+
+
+def test_rules_of_different_domains_on_one_column_conflict() -> None:
+    config = PiiConfig(
+        rules=[
+            PiiRule(database="*", table="Users", columns=["Email"], domain="contact"),
+            PiiRule(database="*", table="Us*", columns=["Email"], domain="money"),
+        ]
+    )
+    with pytest.raises(DomainError) as info:
+        evaluate_domains("SELECT Email FROM Users", config)
+    assert info.value.code is ErrorCode.QUERY_REJECTED
+    assert Reason.DOMAIN_CONFLICT.value in info.value.public_message
+
+
+def test_rules_of_the_same_domain_on_one_column_do_not_conflict() -> None:
+    config = PiiConfig(
+        rules=[
+            PiiRule(database="*", table="Users", columns=["Email"], domain="contact"),
+            PiiRule(database="*", table="Us*", columns=["Email"], domain="contact"),
+        ]
+    )
+    assert evaluate_domains("SELECT Email FROM Users", config).domains == ("contact",)
+
+
+def test_explicit_alias_domain_equals_the_default_domain() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"], domain="srv")]
+    )
+    decision = evaluate_domains(f"SELECT Id FROM Users WHERE Email = {token('a')}", config)
+    assert [site.value for site in decision.token_sites] == ["a"]
 
 
 DENY_CONFIG = PiiConfig(

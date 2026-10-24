@@ -952,6 +952,38 @@ servers:
         load_config(_write(tmp_path, text), _DENY_ENV)
 
 
+def test_shared_rule_sets_carry_the_token_domain(tmp_path: Path) -> None:
+    shared = """pii_rules:
+  - name: people
+    rules:
+      - {database: "*", table: Patients, columns: [Email], domain: contact}
+      - {database: "*", table: Patients, columns: [Dob]}"""
+    text = _peds_config("      include: [people]", shared)
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert [rule.domain for rule in pii.rules] == ["contact", None]
+
+
+@pytest.mark.parametrize("domain", ["", "-x", "has space", "a/b", "é"])
+def test_token_domain_must_look_like_an_alias(tmp_path: Path, domain: str) -> None:
+    rule = f'{{database: "*", table: Patients, columns: [Email], domain: "{domain}"}}'
+    pii = f"      rules: [{rule}]"
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, _peds_config(pii, "")), _DENY_ENV)
+
+
+@pytest.mark.parametrize("section", ["exposed_columns", "deny"])
+def test_token_domain_is_only_for_protection_rules(tmp_path: Path, section: str) -> None:
+    pii = (
+        "      mode: deny-by-default\n"
+        f'      {section}: [{{table: Patients, columns: [Email], domain: "contact"}}]'
+    )
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, _peds_config(pii, "")), _DENY_ENV)
+
+
 def test_shared_rule_sets_carry_deny_and_exposed_columns(tmp_path: Path) -> None:
     shared = """pii_rules:
   - deny: [{table: "*", columns: [Notes]}]

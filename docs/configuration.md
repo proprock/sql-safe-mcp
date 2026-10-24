@@ -306,6 +306,32 @@ pii:
       columns: [email, EMAIL]  # duplicate column
 ```
 
+### Token domains
+
+A token is bound to its server alias and to a token domain. By default the domain is the alias, so
+a token from any protected column of an alias can be compared with any other protected column of
+that alias (for example to join on a protected key). Add `domain` to a `pii.rules` entry to
+narrow this: a token returned for a column in domain `contact` is accepted only in a predicate
+on a column of domain `contact`; anywhere else it is rejected with `INVALID_PII_TOKEN`, the same
+error as a forged token. For health data prefer one domain per entity (for example `patient`,
+`guardian`) so a token cannot be replayed across unrelated columns.
+
+`domain` uses the alias character set (letters, digits, `.`, `_`, `-`; starts with a letter or
+digit) and is allowed only on `pii.rules`, not on `exposed_columns` or `deny`. Rules without
+`domain` keep the alias-wide domain, and tokens issued before domains existed stay valid there. A
+`domain` equal to the alias is the same as no `domain`. If rules of different domains match the
+same column, `execute_sql` rejects any query that touches that column with `QUERY_REJECTED`
+("pii rules of different token domains match the same column"); this is detected per query
+because it depends on the database schema. Adding, changing, or removing a `domain` invalidates
+tokens already issued for the affected columns.
+
+```yaml
+pii:
+  rules:
+    - {database: "*", table: Patients, columns: [Email, Phone], domain: contact}
+    - {database: "*", table: Billing, columns: [Amount], domain: money}
+```
+
 ### Deny-by-default mode and the `deny` list
 
 By default (`pii.mode: protect`) only columns listed in `pii.rules` are protected. For data where

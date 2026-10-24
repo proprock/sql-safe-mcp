@@ -30,6 +30,7 @@ class OutputPlan:
     kind: Literal["column", "count", "literal"]
     source: SourceColumn | None
     protected: bool
+    domain: str | None = None
 
 
 class ValidatedQuery:
@@ -218,9 +219,12 @@ def issue_validated_query(
     sql, ordered = _to_positional(query, parameters, dialect)
     if PREFIX in sql:
         raise reject(Reason.TOKEN_NOT_REPLACED)
+    domains = decision.domains or (None,) * len(decision.protected)
     outputs = tuple(
-        OutputPlan(output.label, output.kind, output.source, protected)
-        for output, protected in zip(analyzed.outputs, decision.protected, strict=True)
+        OutputPlan(output.label, output.kind, output.source, protected, domain)
+        for output, protected, domain in zip(
+            analyzed.outputs, decision.protected, domains, strict=True
+        )
     )
     return ValidatedQuery(
         _SEAL,

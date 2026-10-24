@@ -37,9 +37,9 @@ VALUES = [
 ]
 
 
-def invalid(token: str, codec: TokenCodec) -> DomainError:
+def invalid(token: str, codec: TokenCodec, domain: str | None = None) -> DomainError:
     with pytest.raises(DomainError) as info:
-        codec.decrypt(token)
+        codec.decrypt(token, domain)
     assert info.value.code is ErrorCode.INVALID_PII_TOKEN
     return info.value
 
@@ -123,6 +123,31 @@ def test_token_is_bound_to_its_alias_even_with_the_same_key() -> None:
     token = TokenCodec("alpha", KEY).encrypt("secret")
     invalid(token, TokenCodec("beta", KEY))
     assert TokenCodec("alpha", KEY).decrypt(token) == "secret"
+
+
+def test_token_of_one_domain_is_not_accepted_in_another_domain_of_the_same_alias() -> None:
+    codec = TokenCodec("srv", KEY)
+    token = codec.encrypt("secret", "contact")
+    assert codec.decrypt(token, "contact") == "secret"
+    invalid(token, codec, "money")
+    invalid(token, codec)
+    invalid(codec.encrypt("secret"), codec, "contact")
+
+
+def test_default_domain_keeps_the_alias_only_aad() -> None:
+    codec = TokenCodec("srv", KEY)
+    legacy = _forge("srv", json.dumps({"v": 1, "t": "str", "d": "old"}).encode())
+    assert codec.decrypt(legacy, "srv") == "old"
+    assert codec.decrypt(codec.encrypt("x", "srv")) == "x"
+    assert codec.decrypt(codec.encrypt("x")) == "x"
+
+
+def test_domain_aad_bytes_are_pinned() -> None:
+    codec = TokenCodec("srv", KEY)
+    token = codec.encrypt("x", "contact")
+    raw = base64.urlsafe_b64decode(token[len("pii:v1:") :] + "==")
+    payload = AESGCM(KEY).decrypt(raw[:12], raw[12:], b"pii:v1\x00srv\x00contact")
+    assert json.loads(payload)["d"] == "x"
 
 
 def test_wrong_key_is_rejected_and_rotation_invalidates_tokens() -> None:

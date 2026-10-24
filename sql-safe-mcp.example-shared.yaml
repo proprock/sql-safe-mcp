@@ -38,6 +38,9 @@ pii_rules:
         schema: dbo # Optional for SQL Server; omit it to match every schema.
         table: "Users[0-9]?"
         columns: [Email, FirstName, LastName]
+        # Optional token domain (alias character set). Tokens of one domain are accepted only on
+        # columns of that domain; without it the domain is the server alias.
+        domain: users_identity
 
 servers:
   legacy-prod:

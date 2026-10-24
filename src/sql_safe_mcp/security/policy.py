@@ -44,6 +44,8 @@ class TokenSite:
 class PolicyDecision:
     protected: tuple[bool, ...]
     token_sites: tuple[TokenSite, ...]
+    # Token domain per output; None for an unprotected output.
+    domains: tuple[str | None, ...] = ()
 
 
 class PiiPolicy:
@@ -54,10 +56,11 @@ class PiiPolicy:
         self._config = config
         self._codec = codec
 
-    def _matches(self, rules: Sequence[PiiRule], source: SourceColumn) -> bool:
+    def _matching(self, rules: Sequence[PiiRule], source: SourceColumn) -> list[PiiRule]:
         schema = source.schema.casefold()
         table = source.table.casefold()
         column = source.column.casefold()
+        matched: list[PiiRule] = []
         for rule in rules:
             if rule.database != "*" and rule.database.casefold() != self._database:
                 continue
@@ -66,18 +69,28 @@ class PiiPolicy:
             if fnmatchcase(table, rule.table.casefold()) and (
                 rule.columns == ["*"] or column in {item.casefold() for item in rule.columns}
             ):
-                return True
-        return False
+                matched.append(rule)
+        return matched
+
+    def _matches(self, rules: Sequence[PiiRule], source: SourceColumn) -> bool:
+        return bool(self._matching(rules, source))
 
     def is_denied(self, source: SourceColumn) -> bool:
         return self._matches(self._config.deny, source)
 
-    def is_protected(self, source: SourceColumn) -> bool:
-        if self._matches(self._config.rules, source):
-            return True
-        return self._config.mode == "deny-by-default" and not self._matches(
+    def protected_domain(self, source: SourceColumn) -> str | None:
+        """The token domain of a protected column, or None; the default domain is the alias."""
+        matched = self._matching(self._config.rules, source)
+        if matched:
+            domains = {rule.domain or self._codec.alias for rule in matched}
+            if len(domains) > 1:
+                raise reject(Reason.DOMAIN_CONFLICT)
+            return domains.pop()
+        if self._config.mode == "deny-by-default" and not self._matches(
             self._config.exposed_columns, source
-        )
+        ):
+            return self._codec.alias
+        return None
 
     def evaluate(self, analyzed: AnalyzedQuery) -> PolicyDecision:
         for ref in analyzed.references:
@@ -85,8 +98,9 @@ class PiiPolicy:
                 raise reject(Reason.COLUMN_DENIED)
         sites: list[TokenSite] = []
         for ref in analyzed.references:
-            if self.is_protected(ref.source):
-                sites.extend(self._check_protected(ref))
+            domain = self.protected_domain(ref.source)
+            if domain is not None:
+                sites.extend(self._check_protected(ref, domain))
         consumed = {id(site.literal) for site in sites}
         for literal in analyzed.query.find_all(exp.Literal):
             if (
@@ -95,13 +109,14 @@ class PiiPolicy:
                 and id(literal) not in consumed
             ):
                 raise reject(Reason.TOKEN_OUTSIDE_PROTECTED)
-        protected = tuple(
-            output.source is not None and self.is_protected(output.source)
+        domains = tuple(
+            None if output.source is None else self.protected_domain(output.source)
             for output in analyzed.outputs
         )
-        return PolicyDecision(protected, tuple(sites))
+        protected = tuple(domain is not None for domain in domains)
+        return PolicyDecision(protected, tuple(sites), domains)
 
-    def _check_protected(self, ref: ColumnRef) -> list[TokenSite]:
+    def _check_protected(self, ref: ColumnRef, domain: str) -> list[TokenSite]:
         column = ref.node
         parent = column.parent
         if isinstance(parent, exp.Select):
@@ -111,12 +126,12 @@ class PiiPolicy:
         if not _in_where(column):
             raise reject(Reason.PROTECTED_POSITION)
         if isinstance(parent, exp.EQ) and parent.this is column:
-            return [self._token_site(parent.expression, ref.source)]
+            return [self._token_site(parent.expression, ref.source, domain)]
         if isinstance(parent, exp.In) and parent.this is column and parent.expressions:
-            return [self._token_site(item, ref.source) for item in parent.expressions]
+            return [self._token_site(item, ref.source, domain) for item in parent.expressions]
         raise reject(Reason.PROTECTED_POSITION)
 
-    def _token_site(self, node: exp.Expression, source: SourceColumn) -> TokenSite:
+    def _token_site(self, node: exp.Expression, source: SourceColumn, domain: str) -> TokenSite:
         if (
             not isinstance(node, exp.Literal)
             or not node.is_string
@@ -124,7 +139,7 @@ class PiiPolicy:
         ):
             raise reject(Reason.PROTECTED_NEEDS_TOKEN)
         # Decrypt first: a forged token keeps its INVALID_PII_TOKEN error and priority.
-        value = self._codec.decrypt(str(node.this))
+        value = self._codec.decrypt(str(node.this), domain)
         if _VALUE_CLASSES.get(type(value)) != source.type_class:
             raise reject(Reason.TOKEN_TYPE_MISMATCH)
         return TokenSite(node, value)

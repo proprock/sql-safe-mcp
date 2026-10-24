@@ -105,6 +105,12 @@ def test_reasons_are_reported_verbatim(sql: str, reason: Reason) -> None:
     assert message_of(sql) == f"Query rejected: {reason.value}."
 
 
+def test_domain_conflict_text_is_pinned() -> None:
+    assert Reason.DOMAIN_CONFLICT.value == (
+        "pii rules of different token domains match the same column"
+    )
+
+
 def test_column_denied_text_is_pinned() -> None:
     assert Reason.COLUMN_DENIED.value == "a denied column cannot be referenced"
 

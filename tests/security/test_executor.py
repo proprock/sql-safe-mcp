@@ -143,6 +143,30 @@ def test_protected_cells_are_tokenized_and_null_stays_null() -> None:
     assert "a@b.c" not in json.dumps(result.rows)
 
 
+def test_protected_cells_are_tokenized_with_the_domain_of_their_column() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", schema="dbo", table="Users", columns=["Email"], domain="pii")]
+    )
+    query = validate_sql(
+        "SELECT Email, Name FROM Users",
+        alias="srv",
+        database="app",
+        catalog=Catalog(),
+        pii_config=config,
+        codec=CODEC,
+        runtime=RUNTIME,
+        max_rows=3,
+        dialect=SQLSERVER,
+    )
+    connection = RecordingConnection(FakeResult(["Email", "Name"], [("a@b.c", "n")]))
+    result = execute_validated(connection, query, CODEC)
+    cell = result.rows[0][0]
+    assert CODEC.decrypt(cell, "pii") == "a@b.c"
+    with pytest.raises(DomainError):
+        CODEC.decrypt(cell)
+    assert result.rows[0][1] == "n"
+
+
 def test_token_length_does_not_depend_on_plaintext_length_within_a_bucket() -> None:
     sql = "SELECT Email, Id FROM Users"
     keys = ["Email", "Id"]

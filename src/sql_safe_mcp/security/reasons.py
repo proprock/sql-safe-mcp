@@ -36,6 +36,7 @@ class Reason(StrEnum):
     TOKEN_TYPE_MISMATCH = "a PII token does not match the type of the protected column"
     PROTECTED_NEEDS_TOKEN = "a protected column can only be compared with a PII token"
     COLUMN_DENIED = "a denied column cannot be referenced"
+    DOMAIN_CONFLICT = "pii rules of different token domains match the same column"
     TABLE_GONE = "a referenced table no longer exists"
     TABLE_NOT_FOUND = "a referenced table was not found or is ambiguous; qualify it with a schema"
     TABLE_SCOPE = "only tables of the current database are supported"
