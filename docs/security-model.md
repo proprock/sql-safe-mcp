@@ -10,7 +10,10 @@ environment, host OS, configured database server, and credentials form the trust
 Database credentials remain the primary authorization control.
 
 PII protection covers only configured columns. Each `all_pii_safe` server alias has a unique AES-256
-key and a distinct authenticated token domain. Tokens are bearer secrets and must not be logged.
+key and a distinct authenticated token domain. Tokens are bearer secrets and must not be logged. The token payload is padded to a multiple of 32
+bytes, so a token's length reveals only which 32-byte bucket the plaintext length falls in. That
+bucket remains a residual leak, and a long value (for example a free-text field) still discloses
+its approximate size. Tokens issued before padding existed stay valid.
 
 SQL validation is an allowlist. Unknown syntax, cross-database names, unresolved tables or columns,
 unsupported lineage, and unsupported protected-value types fail closed. An alias may name only a

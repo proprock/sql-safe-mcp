@@ -143,6 +143,19 @@ def test_protected_cells_are_tokenized_and_null_stays_null() -> None:
     assert "a@b.c" not in json.dumps(result.rows)
 
 
+def test_token_length_does_not_depend_on_plaintext_length_within_a_bucket() -> None:
+    sql = "SELECT Email, Id FROM Users"
+    keys = ["Email", "Id"]
+    _, _, short = run(sql, [("abc", 1), (None, 2)], keys=keys)
+    _, _, long = run(sql, [("a" * 20, 1), (None, 2)], keys=keys)
+    assert short.columns == long.columns
+    assert short.truncated == long.truncated
+    assert short.rows[1] == long.rows[1]
+    assert short.rows[0][1] == long.rows[0][1]
+    assert short.rows[0][0] != long.rows[0][0]
+    assert len(short.rows[0][0]) == len(long.rows[0][0])
+
+
 def test_protected_marker_never_appears_in_the_response() -> None:
     marker = "PII-MARKER-7f3a"
     _, _, result = run("SELECT Email FROM Users", [(marker,)], keys=["Email"])

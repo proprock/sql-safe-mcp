@@ -24,6 +24,9 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- PII tokens now pad their payload to a multiple of 32 bytes, so token length reveals only a
+  32-byte bucket of the plaintext length. The `pii:v1:` format is unchanged and tokens issued
+  before this change stay valid.
 - `execute_sql` now allows each SQL construct only in the positions the supported subset uses.
   A bare column or literal used as a condition (`WHERE a`, `ON 1`, `WHERE a AND b = 1`) and any
   other node in an unlisted position is rejected with `QUERY_REJECTED` before the database runs

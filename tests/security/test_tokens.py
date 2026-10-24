@@ -6,6 +6,8 @@ from uuid import UUID
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from hypothesis import given
+from hypothesis import strategies as st
 
 from sql_safe_mcp.config import AppConfig
 from sql_safe_mcp.errors import DomainError, ErrorCode
@@ -61,10 +63,60 @@ def test_nonce_is_random() -> None:
     assert codec.encrypt("same") != codec.encrypt("same")
 
 
-def test_token_layout_is_nonce_ciphertext_tag() -> None:
+def _raw_len(token: str) -> int:
+    body = token.removeprefix("pii:v1:")
+    return len(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+
+def test_token_layout_is_nonce_padded_ciphertext_tag() -> None:
     token = TokenCodec("srv", KEY).encrypt("a")
-    raw = base64.urlsafe_b64decode(token.removeprefix("pii:v1:") + "==")
-    assert len(raw) == 12 + len(b'{"v":1,"t":"str","d":"a"}') + 16
+    assert _raw_len(token) == 12 + 32 + 16
+
+
+def test_token_length_reveals_only_the_32_byte_bucket() -> None:
+    codec = TokenCodec("srv", KEY)
+    # Payload is 31 + len(s) bytes: {"v":1,"t":"str","d":""} (24) + ,"p":"" (7) + s.
+    lengths = {n: _raw_len(codec.encrypt("a" * n)) for n in range(0, 100)}
+    assert {lengths[n] for n in range(0, 2)} == {12 + 32 + 16}
+    assert {lengths[n] for n in range(2, 34)} == {12 + 64 + 16}
+    assert {lengths[n] for n in range(34, 66)} == {12 + 96 + 16}
+    assert lengths[66] == 12 + 128 + 16
+    assert all((lengths[n] - 12 - 16) % 32 == 0 for n in lengths)
+
+
+def test_all_value_types_are_padded_to_the_block() -> None:
+    codec = TokenCodec("srv", KEY)
+    for value in VALUES:
+        assert (_raw_len(codec.encrypt(value)) - 28) % 32 == 0
+
+
+@given(st.text(max_size=300))
+def test_token_length_depends_only_on_payload_bucket(text: str) -> None:
+    codec = TokenCodec("srv", KEY)
+    unpadded = len(
+        json.dumps(
+            {"v": 1, "t": "str", "d": text}, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+    )
+    blocks = -(-(unpadded + len(b',"p":""')) // 32)
+    assert _raw_len(codec.encrypt(text)) == 12 + blocks * 32 + 16
+
+
+def test_legacy_token_without_padding_field_is_accepted() -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "old"}, separators=(",", ":")).encode()
+    assert TokenCodec("srv", KEY).decrypt(_forge("srv", payload)) == "old"
+
+
+def test_padding_field_with_zeros_is_accepted_including_empty() -> None:
+    for pad in ("", "0", "0" * 40):
+        payload = json.dumps({"v": 1, "t": "str", "d": "x", "p": pad}, separators=(",", ":"))
+        assert TokenCodec("srv", KEY).decrypt(_forge("srv", payload.encode())) == "x"
+
+
+@pytest.mark.parametrize("pad", ["1", "00a", " ", "0 ", 0, None, ["0"]])
+def test_non_canonical_padding_is_rejected(pad: object) -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "x", "p": pad}, separators=(",", ":"))
+    invalid(_forge("srv", payload.encode()), TokenCodec("srv", KEY))
 
 
 def test_token_is_bound_to_its_alias_even_with_the_same_key() -> None:

@@ -19,6 +19,11 @@ MAX_TOKEN_CHARS = 4096
 _NONCE_BYTES = 12
 _KEY_BYTES = 32
 _PAYLOAD_VERSION = 1
+# Payload is padded to a multiple of _PAD_BLOCK bytes so token length reveals only the bucket;
+# _PAD_FIELD_BYTES is the size of the empty `,"p":""` field added to the unpadded payload.
+_PAD_BLOCK = 32
+_PAD_FIELD_BYTES = len(b',"p":""')
+_PADDED_KEYS = {"v", "t", "d", "p"}
 
 
 def _invalid_token() -> DomainError:
@@ -34,6 +39,12 @@ def _unsupported_value() -> DomainError:
         ErrorCode.QUERY_REJECTED,
         "Query rejected: a protected column contains a value that cannot be tokenized.",
         "Do not select this protected column.",
+    )
+
+
+def _dump(document: dict[str, Any]) -> bytes:
+    return json.dumps(document, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode(
+        "ascii"
     )
 
 
@@ -132,12 +143,10 @@ class TokenCodec:
             raise _unsupported_value()
         tag, to_data = entry
         try:
-            payload = json.dumps(
-                {"v": _PAYLOAD_VERSION, "t": tag, "d": to_data(value)},
-                separators=(",", ":"),
-                ensure_ascii=True,
-                allow_nan=False,
-            ).encode("ascii")
+            document: dict[str, Any] = {"v": _PAYLOAD_VERSION, "t": tag, "d": to_data(value)}
+            unpadded = _dump(document)
+            document["p"] = "0" * (-(len(unpadded) + _PAD_FIELD_BYTES) % _PAD_BLOCK)
+            payload = _dump(document)
         except (ValueError, OverflowError) as exc:
             raise _unsupported_value() from exc
         nonce = os.urandom(_NONCE_BYTES)
@@ -168,7 +177,10 @@ class TokenCodec:
         nonce, sealed = raw[:_NONCE_BYTES], raw[_NONCE_BYTES:]
         payload = self._aead.decrypt(nonce, sealed, self._aad)
         document = json.loads(payload.decode("utf-8"), parse_constant=_reject_constant)
-        if not isinstance(document, dict) or set(document) != {"v", "t", "d"}:
+        if not isinstance(document, dict) or set(document) not in ({"v", "t", "d"}, _PADDED_KEYS):
+            raise ValueError
+        padding = document.get("p", "")
+        if type(padding) is not str or padding.strip("0"):
             raise ValueError
         version = document["v"]
         if type(version) is not int or version != _PAYLOAD_VERSION:
