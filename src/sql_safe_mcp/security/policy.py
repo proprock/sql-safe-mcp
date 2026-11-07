@@ -123,7 +123,9 @@ class PiiPolicy:
             return []
         if isinstance(parent, exp.Alias) and isinstance(parent.parent, exp.Select):
             return []
-        if not _in_where(column):
+        # Only WHERE: the nearest clause above the column must not be ON, ORDER BY or the SELECT.
+        clause = column.find_ancestor(exp.Where, exp.Join, exp.Order, exp.Select)
+        if not isinstance(clause, exp.Where):
             raise reject(Reason.PROTECTED_POSITION)
         if isinstance(parent, exp.EQ) and parent.this is column:
             return [self._token_site(parent.expression, ref.source, domain)]
@@ -143,14 +145,3 @@ class PiiPolicy:
         if _VALUE_CLASSES.get(type(value)) != source.type_class:
             raise reject(Reason.TOKEN_TYPE_MISMATCH)
         return TokenSite(node, value)
-
-
-def _in_where(node: exp.Expression) -> bool:
-    current = node.parent
-    while current is not None:
-        if isinstance(current, exp.Where):
-            return True
-        if isinstance(current, exp.Join | exp.Order | exp.Select):
-            return False
-        current = current.parent
-    return False
