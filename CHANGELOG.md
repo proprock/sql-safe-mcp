@@ -24,6 +24,9 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - `runtime.token_ttl_seconds` (off by default) rejects tokens older than the limit with
   `INVALID_PII_TOKEN`. Enabling it also rejects tokens issued before it was set. The token format
   stays `pii:v1:`.
+- `runtime.min_count_cell` (off by default) makes `execute_sql` return a `COUNT(*)` value from 1
+  to the threshold minus one as `null`, with the new column encoding `suppressed`. `0` is not
+  suppressed.
 - `pii_key_file` reads an alias key from a file instead of `pii_key_env`; a relative path is
   resolved against the configuration file's directory. On POSIX the file must be owned by the
   server user or root, with no access for others and no group write.

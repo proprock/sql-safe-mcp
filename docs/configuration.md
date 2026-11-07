@@ -484,6 +484,7 @@ Optional, under `runtime:`. A value outside its range is a startup error.
 | `statement_timeout_seconds` | 30 | 1-3600 |
 | `max_definition_chars` | 262144 | 1024-10000000 |
 | `token_ttl_seconds` | none (tokens do not expire) | 1-315360000; see [Token lifetime](#token-lifetime) |
+| `min_count_cell` | 0 (off) | 0-1000. `execute_sql` returns a `COUNT(*)` value below it, except `0`, as `null` with encoding `suppressed` (see `docs/tools.md`). |
 | `default_max_rows` | 200 | 1-100000, at most `hard_max_rows` |
 | `hard_max_rows` | 1000 | 1-100000 |
 | `max_sql_chars` | 65536 | 256-1000000 |

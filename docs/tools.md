@@ -73,5 +73,9 @@ reference and is rejected, and `TIME` results beyond 24 hours are not supported.
   the type of the protected column".
 - Each result column reports `name`, `source` (`schema`, `table`, `column`, or `null`),
   `protected`, and `encoding` (`json`, `token`, `decimal`, `date`, `time`, `datetime`, `uuid`,
-  `base64`).
+  `base64`, `suppressed`).
+- With `runtime.min_count_cell` set to `k`, a `COUNT(*)` value from 1 to `k - 1` is returned as
+  `null` and its column's encoding is `suppressed`; other values in that column stay JSON
+  integers. `0` is returned as is: an empty result names no one. The threshold does not stop
+  differencing, such as subtracting the counts of two overlapping filters.
 - Token values are sent to the database only as bind parameters, never inside the SQL text.
