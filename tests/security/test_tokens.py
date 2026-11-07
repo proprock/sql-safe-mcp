@@ -286,3 +286,70 @@ def test_registry_repr_hides_keys() -> None:
     registry = TokenKeyRegistry.from_config(_config({"a": KEY}))
     assert KEY.hex() not in repr(registry)
     assert base64.b64encode(KEY).decode() not in repr(registry)
+
+
+# --- token time-to-live --------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_ttl_accepts_a_token_up_to_its_age_limit_and_rejects_it_after() -> None:
+    clock = _Clock(1_700_000_000.5)
+    codec = TokenCodec("srv", KEY, ttl_seconds=60, clock=clock)
+    token = codec.encrypt("secret")
+
+    for age, accepted in ((0, True), (59, True), (60, True), (61, False), (3600, False)):
+        clock.now = 1_700_000_000.5 + age
+        if accepted:
+            assert codec.decrypt(token) == "secret"
+        else:
+            invalid(token, codec)
+
+
+def test_ttl_rejects_a_token_without_an_issue_time() -> None:
+    untimed = TokenCodec("srv", KEY).encrypt("secret")
+
+    invalid(untimed, TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(0)))
+
+
+def test_a_timed_token_is_accepted_when_ttl_is_off() -> None:
+    timed = TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(1000)).encrypt("secret")
+
+    assert TokenCodec("srv", KEY).decrypt(timed) == "secret"
+
+
+def test_issue_time_is_whole_seconds_in_the_padded_payload() -> None:
+    codec = TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(1234.9))
+    token = codec.encrypt("x")
+    raw = base64.urlsafe_b64decode(token[len("pii:v1:") :] + "==")
+    document = json.loads(AESGCM(KEY).decrypt(raw[:12], raw[12:], b"pii:v1\x00srv"))
+
+    assert document["i"] == 1234
+    assert set(document) == {"v", "t", "d", "i", "p"}
+    assert (_raw_len(token) - 28) % 32 == 0
+
+
+@pytest.mark.parametrize("issued", ["1000", 1000.0, True, None, -1, [1000]])
+def test_a_non_canonical_issue_time_is_rejected(issued: object) -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "x", "i": issued, "p": ""})
+    token = _forge("srv", payload.encode())
+
+    invalid(token, TokenCodec("srv", KEY))
+    invalid(token, TokenCodec("srv", KEY, ttl_seconds=10**9, clock=_Clock(2000)))
+
+
+def test_registry_wires_the_ttl() -> None:
+    config = _config({"a": KEY})
+    config = config.model_copy(
+        update={"runtime": config.runtime.model_copy(update={"token_ttl_seconds": 60})}
+    )
+    codec = TokenKeyRegistry.from_config(config).codec_for("a")
+
+    invalid(TokenCodec("a", KEY).encrypt("x"), codec)
+    assert codec.decrypt(TokenCodec("a", KEY, ttl_seconds=60).encrypt("x")) == "x"

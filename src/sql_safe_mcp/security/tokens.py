@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time as _time
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -24,6 +25,9 @@ _PAYLOAD_VERSION = 1
 _PAD_BLOCK = 32
 _PAD_FIELD_BYTES = len(b',"p":""')
 _PADDED_KEYS = {"v", "t", "d", "p"}
+# Tokens issued while a TTL is configured also carry "i", the issue time in whole Unix seconds.
+_TIMED_KEYS = {"v", "t", "d", "i", "p"}
+_KEY_SETS = ({"v", "t", "d"}, _PADDED_KEYS, _TIMED_KEYS)
 
 
 def _invalid_token() -> DomainError:
@@ -110,15 +114,26 @@ def _decode_value(tag: str, data: Any) -> Any:
 
 
 class TokenCodec:
-    """AES-256-GCM tokens for one server alias; the alias is authenticated as AAD."""
+    """AES-256-GCM tokens for one server alias; the alias is authenticated as AAD.
 
-    __slots__ = ("_aead", "_alias")
+    With a TTL, new tokens carry their issue time and expire `ttl_seconds` after it.
+    """
 
-    def __init__(self, alias: str, key: bytes) -> None:
+    __slots__ = ("_aead", "_alias", "_clock", "_ttl")
+
+    def __init__(
+        self,
+        alias: str,
+        key: bytes,
+        ttl_seconds: int | None = None,
+        clock: Callable[[], float] = _time.time,
+    ) -> None:
         if len(key) != _KEY_BYTES:
             raise ValueError(f"PII key must be {_KEY_BYTES} bytes")
         self._alias = alias
         self._aead = AESGCM(key)
+        self._ttl = ttl_seconds
+        self._clock = clock
 
     def _aad(self, domain: str | None) -> bytes:
         # The default domain is the alias itself and keeps the pre-domain AAD, so existing tokens
@@ -150,6 +165,8 @@ class TokenCodec:
         tag, to_data = entry
         try:
             document: dict[str, Any] = {"v": _PAYLOAD_VERSION, "t": tag, "d": to_data(value)}
+            if self._ttl is not None:
+                document["i"] = int(self._clock())
             unpadded = _dump(document)
             document["p"] = "0" * (-(len(unpadded) + _PAD_FIELD_BYTES) % _PAD_BLOCK)
             payload = _dump(document)
@@ -183,7 +200,14 @@ class TokenCodec:
         nonce, sealed = raw[:_NONCE_BYTES], raw[_NONCE_BYTES:]
         payload = self._aead.decrypt(nonce, sealed, self._aad(domain))
         document = json.loads(payload.decode("utf-8"), parse_constant=_reject_constant)
-        if not isinstance(document, dict) or set(document) not in ({"v", "t", "d"}, _PADDED_KEYS):
+        if not isinstance(document, dict) or set(document) not in _KEY_SETS:
+            raise ValueError
+        issued = document.get("i", 0)
+        if type(issued) is not int or issued < 0:
+            raise ValueError
+        if self._ttl is not None and (
+            "i" not in document or int(self._clock()) - issued > self._ttl
+        ):
             raise ValueError
         padding = document.get("p", "")
         if type(padding) is not str or padding.strip("0"):
@@ -208,7 +232,7 @@ class TokenKeyRegistry:
         for alias, server in config.servers.items():
             key = server.key_bytes()
             if key is not None:
-                codecs[alias] = TokenCodec(alias, key)
+                codecs[alias] = TokenCodec(alias, key, ttl_seconds=config.runtime.token_ttl_seconds)
         return cls(codecs)
 
     def __repr__(self) -> str:
