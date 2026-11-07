@@ -7,6 +7,8 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-07
+
 ### Added
 
 - `sql-safe-mcp --verify-pii-rules [--strict]` connects to each `all_pii_safe` alias, reports how
