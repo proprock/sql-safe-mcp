@@ -234,6 +234,33 @@ returned by `execute_sql` for the same alias; a matching prefix alone is not eno
 authenticated and alias-bound, then validated and converted to a bound database value.
 Protection covers the columns you list, so list every column that holds personal data.
 
+### Hardening for sensitive data
+
+An `all_pii_safe` alias requires verified TLS in its `connection_url` and fails at startup without
+it; `require_tls: false` turns the check off and logs a warning at every start
+([Verified TLS](docs/configuration.md#verified-tls)). Every other control below is opt-in:
+
+- **Protect by default** - `pii.mode: deny-by-default` protects every column not listed in
+  `pii.exposed_columns`, and `pii.deny` rejects any query that references a listed column
+  ([Deny-by-default](docs/configuration.md#deny-by-default-mode-and-the-deny-list)).
+- **Check rules against the schema** - `sql-safe-mcp --verify-pii-rules [--strict]` reports what
+  each rule matches and flags unprotected columns whose names look personal
+  ([Verifying PII rules](docs/configuration.md#verifying-pii-rules-against-the-real-schema)).
+- **Limit token reuse** - rules with different `domain` values reject each other's tokens, and
+  `runtime.token_ttl_seconds` expires old tokens
+  ([Token domains](docs/configuration.md#token-domains),
+  [Token lifetime](docs/configuration.md#token-lifetime)).
+- **Keep the key out of the environment** - `pii_key_file` reads the key from a file whose owner
+  and permissions are checked at startup ([Key file](docs/configuration.md#key-file-or-environment-variable)).
+- **Suppress small counts** - `runtime.min_count_cell` returns small nonzero `COUNT(*)` values as
+  `null` ([Runtime limits](docs/configuration.md#runtime-limits)).
+- **Audit reads** - `logging.audit: true` logs the tables and columns each `execute_sql` call read,
+  without SQL, values, or rows ([Audit log](docs/configuration.md#audit-log)).
+
+Tokens hide values but are pseudonyms, not anonymization: what a token still reveals is listed in
+the [security model](docs/security-model.md). For medical deployments, see
+[Health data of minors](docs/health-data.md).
+
 ## Documentation
 
 - [Configuration reference](docs/configuration.md) - aliases, connection URLs, PII rules, runtime
