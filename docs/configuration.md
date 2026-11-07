@@ -104,6 +104,7 @@ servers:
 | `connection_url` | Required. A SQLAlchemy `mssql+pyodbc://` (SQL Server) or `mysql+pymysql://` (MySQL, MariaDB) URL whose dialect must match `engine`. Treated as a secret. |
 | `pii_key_env` | Required for `all_pii_safe`, forbidden otherwise. The name of the environment variable holding the alias key; matches `^[A-Z_][A-Z0-9_]*$`. |
 | `pii` | Required for `all_pii_safe`, forbidden otherwise. Holds `rules`; see [PII rules](#pii-rules). |
+| `require_tls` | `all_pii_safe` only, default `true`: `connection_url` must request verified TLS. `false` turns the check off and logs a warning at startup; see [Verified TLS](#verified-tls). Forbidden on other access levels. |
 
 ### `connection_url`
 
@@ -139,7 +140,7 @@ connection_url: >-
 | `SQLSERVER_DATABASE` | Database to connect to, for example `master` or `Reporting`. Database permissions still control what the server can read. |
 | `driver` | Required ODBC driver name. It must name an installed driver; spaces are written as `+` because this is a URL. `ODBC+Driver+18+for+SQL+Server` is the usual value for Driver 18. |
 | `Encrypt=yes` | Requests an encrypted connection. Keep it enabled for normal deployments. |
-| `TrustServerCertificate=no` | Requires certificate validation. Set it to `yes` only when a controlled development environment deliberately uses a certificate that cannot be validated. |
+| `TrustServerCertificate=no` | Requires certificate validation. Set it to `yes` only when a controlled development environment deliberately uses a certificate that cannot be validated; an `all_pii_safe` alias then also needs `require_tls: false`. |
 
 Other query options are ODBC connection attributes. Use only options required by the server or
 your organization's connection policy; they remain part of the secret URL when using a whole-value
@@ -165,6 +166,7 @@ connection_url: >-
 | `MYSQL_DATABASE` | Database (catalog) to connect to. MySQL and MariaDB have no separate schema level in this server. |
 | `charset=utf8mb4` | Requests the UTF-8 character set that supports the full Unicode range. Change it only when the database is configured for a different required character set. |
 | `connect_timeout=10` | Limits the driver's connection attempt to 10 seconds. Use a positive number appropriate for the network; it is separate from the YAML `runtime.pool_timeout_seconds`, which limits waiting for a pooled connection. |
+| `ssl_ca=/path/ca.pem` | Not in the example above, but required for an `all_pii_safe` alias: the CA file (or `ssl_capath`, a CA directory) that verifies the server certificate. See [Verified TLS](#verified-tls). |
 
 For either form, if a URL part must be literal rather than a placeholder, URL-encode reserved
 characters in that part. The following [Placeholders](#placeholders) section explains the
@@ -212,6 +214,22 @@ A key reused by two aliases is rejected. Tokens authenticate the alias as associ
 they cannot cross aliases even if keys are duplicated outside normal config loading. Rotating a key
 or renaming an alias will invalidate existing tokens. `metadata` and `meta_and_code` servers must
 not set `pii_key_env` or `pii`.
+
+### Verified TLS
+
+An `all_pii_safe` alias returns PII-derived results, so by default its `connection_url` must ask
+the driver for an encrypted connection with a verified server certificate. The check reads the
+URL query options, ignoring case in option names and values; an option given twice is rejected.
+
+| Engine | Required | Rejected |
+|---|---|---|
+| `sqlserver` | `Encrypt` set to `yes`, `true`, `mandatory` or `strict` | `TrustServerCertificate` other than `no` or `false`; `odbc_connect`, which the check cannot read |
+| `mysql`, `mariadb` | `ssl_ca` or `ssl_capath` | `ssl_verify_cert`, `ssl_verify_identity`, `ssl_disabled`; `ssl_check_hostname` other than `true` |
+
+For a development database with a self-signed certificate, set `require_tls: false` on that alias.
+The server then accepts any URL and logs a warning naming the alias at every start. The error and
+the warning never include the URL. `metadata` and `meta_and_code` aliases must not set
+`require_tls`.
 
 ### Token lifetime
 

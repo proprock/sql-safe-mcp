@@ -27,6 +27,11 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- `all_pii_safe` aliases now require verified TLS in `connection_url`: SQL Server needs
+  `Encrypt=yes` and rejects `TrustServerCertificate=yes` and `odbc_connect`; MySQL and MariaDB
+  need `ssl_ca` or `ssl_capath` and reject options that turn certificate checks off. A
+  configuration without them fails at startup with `CONFIG_ERROR`. `require_tls: false` on the
+  alias turns the check off and logs a warning at every start.
 - `pii.rules` entries accept an optional `domain`. A token returned for a column of one domain is
   rejected with `INVALID_PII_TOKEN` when compared with a column of another domain, so protected
   values cannot be replayed across unrelated columns. Without `domain` the domain is the server
