@@ -534,6 +534,29 @@ def test_a_detached_token_comparison_is_not_inside_a_where_clause() -> None:
     assert info.value.public_message == f"Query rejected: {Reason.PROTECTED_POSITION.value}."
 
 
+@pytest.mark.parametrize("clause", ["join", "order", "select"])
+def test_a_where_above_on_order_or_a_subquery_does_not_make_the_column_a_where_operand(
+    clause: str,
+) -> None:
+    # Hand-built: the parser never nests these under WHERE, so policy must refuse them by itself.
+    from sql_safe_mcp.security.lineage import AnalyzedQuery, ColumnRef, SourceColumn
+
+    column = exp.column("Email", table="u")
+    comparison = exp.EQ(this=column, expression=exp.Literal.string(OWN.encrypt("value")))
+    inner = {
+        "join": lambda: exp.Join(this=exp.to_table("Users"), on=comparison),
+        "order": lambda: exp.Order(expressions=[exp.Ordered(this=comparison)]),
+        "select": lambda: exp.select(comparison),
+    }[clause]()
+    query = exp.select("1")
+    query.set("where", exp.Where(this=inner))
+    ref = ColumnRef(column, SourceColumn("dbo", "Users", "Email", "string"))
+    rules = [PiiRule(database="*", table="Users", columns=["Email"])]
+    with pytest.raises(DomainError) as info:
+        PiiPolicy("app", PiiConfig(rules=rules), OWN).evaluate(AnalyzedQuery(query, (), (ref,)))
+    assert info.value.public_message == f"Query rejected: {Reason.PROTECTED_POSITION.value}."
+
+
 def test_the_allowlist_refuses_a_non_select_root() -> None:
     for root in (
         exp.Delete(this=exp.to_table("t")),
