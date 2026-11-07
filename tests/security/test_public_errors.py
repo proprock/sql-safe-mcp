@@ -197,6 +197,7 @@ def test_validated_query_refuses_forgery_copy_and_serialization_with_clear_messa
             parameters=(),
             outputs=(),
             max_rows=1,
+            min_count_cell=0,
         )
     with raises_exact(TypeError, "ValidatedQuery cannot be copied"):
         copy.copy(query)

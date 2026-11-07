@@ -67,7 +67,7 @@ class ValidatedQuery:
         parameters: tuple[Any, ...],
         outputs: tuple[OutputPlan, ...],
         max_rows: int,
-        min_count_cell: int = 0,
+        min_count_cell: int,
         references: tuple[SourceColumn, ...] = (),
         tables: tuple[tuple[str, str], ...] = (),
     ) -> None:

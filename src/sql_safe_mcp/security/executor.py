@@ -112,10 +112,8 @@ def execute_validated(
                         raise _unsupported_result()
                     if 0 < value < threshold:
                         suppressed[index] = True
-                        cells.append(None)
-                    else:
-                        encodings[index] = "json"
-                        cells.append(value)
+                        value = None
+                    cells.append(value)
                 elif plan.protected:
                     cells.append(codec.encrypt(value, plan.domain))
                 else:
