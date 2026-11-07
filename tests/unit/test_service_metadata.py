@@ -19,6 +19,7 @@ import pytest
 import sqlalchemy as sa
 from pydantic import SecretStr
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from sql_safe_mcp import service as service_module
 from sql_safe_mcp.config import AppConfig, RuntimeConfig, ServerConfig
@@ -436,7 +437,33 @@ def test_timeout_log_line_keeps_the_database(
     )
 
 
+def test_pool_timeout_log_line_keeps_the_database(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    _failing(world, SQLAlchemyTimeoutError("pool exhausted"))
+
+    with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
+        error = _error(world.service.list_tables("alpha", "app"))
+
+    assert error.code is ErrorCode.TIMEOUT
+    assert "operation failed server=alpha database=app operation=list_tables code=TIMEOUT" in (
+        caplog.text
+    )
+
+
 # --- schema cache --------------------------------------------------------------------------
+
+
+def test_reflected_catalog_is_scoped_to_its_alias_and_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[tuple[object, ...]] = []
+    monkeypatch.setattr(service_module, "ReflectedCatalog", lambda *args: built.append(args))
+    service = DatabaseService(_config(), cast(EngineRegistry, RunningRegistry()))
+
+    service._reflected_catalog(cast(sa.Connection, CONNECTION), "alpha", "main")
+
+    assert built == [(CONNECTION, service._schema_cache, "alpha", "main")]
 
 
 def test_reflected_catalog_reads_through_the_service_schema_cache() -> None:

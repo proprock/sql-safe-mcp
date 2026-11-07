@@ -266,6 +266,24 @@ def test_column_wildcards_are_reported_per_section(
     assert message in _pii_summary(pii)
 
 
+@pytest.mark.parametrize(
+    ("section", "columns", "message"),
+    [
+        ("rules", ["*"], "pii rules and exposed_columns cannot list '*' columns; only deny can"),
+        ("deny", ["a*"], "a deny column wildcard must be exactly ['*']"),
+    ],
+    ids=["rules-star", "deny-partial"],
+)
+def test_column_wildcard_errors_are_the_exact_text(
+    section: str, columns: list[str], message: str
+) -> None:
+    rule: dict[str, object] = {"database": "*", "table": "T", "columns": ["c"]}
+    pii: dict[str, object] = {"rules": [rule]}
+    pii[section] = [dict(rule, columns=columns)]
+
+    assert f"Value error, {message} [type=value_error" in _pii_summary(pii)
+
+
 def test_table_patterns_are_valid_pii_rule_configuration() -> None:
     model = _model(base64.b64encode(bytes(range(32))).decode())
     server = cast(dict[str, object], model["servers"])["s"]
