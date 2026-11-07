@@ -65,8 +65,8 @@ executed except through the validated AST, and rejection reasons come from a fix
 
 ### Equivalent mutants
 
-The last complete mutation run (Linux, mutmut 3.8, 2652 mutants, after adding `pii_key_file`)
-killed 2602 mutants, with no timeouts and no unclassified survivors. The 50 survivors are
+The last complete mutation run (Linux, mutmut 3.8, 2684 mutants, after adding `min_count_cell`)
+killed 2634 mutants, with no timeouts and no unclassified survivors. The 50 survivors are
 equivalent to the original code:
 
 | Location | Mutation | Why it cannot change behavior |
