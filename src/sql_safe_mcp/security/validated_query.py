@@ -48,6 +48,7 @@ class ValidatedQuery:
         "_ast",
         "_database",
         "_max_rows",
+        "_min_count_cell",
         "_outputs",
         "_parameters",
         "_references",
@@ -66,6 +67,7 @@ class ValidatedQuery:
         parameters: tuple[Any, ...],
         outputs: tuple[OutputPlan, ...],
         max_rows: int,
+        min_count_cell: int = 0,
         references: tuple[SourceColumn, ...] = (),
         tables: tuple[tuple[str, str], ...] = (),
     ) -> None:
@@ -80,6 +82,7 @@ class ValidatedQuery:
         object.__setattr__(self, "_references", references)
         object.__setattr__(self, "_tables", tables)
         object.__setattr__(self, "_max_rows", max_rows)
+        object.__setattr__(self, "_min_count_cell", min_count_cell)
 
     def __setattr__(self, name: str, value: object) -> NoReturn:
         raise AttributeError("ValidatedQuery is read-only")
@@ -136,6 +139,11 @@ class ValidatedQuery:
     @property
     def max_rows(self) -> int:
         return self._max_rows
+
+    @property
+    def min_count_cell(self) -> int:
+        """`COUNT` values from 1 to this minus one are returned as null; 0 disables."""
+        return self._min_count_cell
 
     @property
     def ast(self) -> exp.Select:
@@ -237,4 +245,5 @@ def issue_validated_query(
         references=tuple(ref.source for ref in analyzed.references),
         tables=tables,
         max_rows=max_rows,
+        min_count_cell=runtime.min_count_cell,
     )

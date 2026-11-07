@@ -421,6 +421,17 @@ def test_execute_sql_output_schema_is_typed(monkeypatch: Any) -> None:
     asyncio.run(scenario())
 
 
+def test_execute_sql_output_schema_lists_the_suppressed_encoding() -> None:
+    async def scenario() -> None:
+        async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
+            tool = next(t for t in (await client.list_tools()).tools if t.name == "execute_sql")
+            assert tool.output_schema is not None
+            encoding = tool.output_schema["$defs"]["SqlColumn"]["properties"]["encoding"]
+            assert "suppressed" in encoding["enum"]
+
+    asyncio.run(scenario())
+
+
 def test_create_server_applies_the_configured_log_level() -> None:
     config = _config().model_copy(update={"logging": LoggingConfig(level="DEBUG")})
     logging.getLogger("sql_safe_mcp").setLevel(logging.NOTSET)

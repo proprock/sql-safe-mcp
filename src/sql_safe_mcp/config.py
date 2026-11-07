@@ -37,6 +37,7 @@ class RuntimeConfig(BaseModel):
     # None keeps tokens valid until the key changes; otherwise a token expires this many whole
     # seconds after it was issued.
     token_ttl_seconds: int | None = Field(default=None, ge=1, le=315_360_000, strict=True)
+    min_count_cell: int = Field(default=0, ge=0, le=1000, strict=True)
     default_max_rows: int = Field(default=200, ge=1, le=100_000)
     hard_max_rows: int = Field(default=1000, ge=1, le=100_000)
     max_sql_chars: int = Field(default=65_536, ge=256, le=1_000_000)

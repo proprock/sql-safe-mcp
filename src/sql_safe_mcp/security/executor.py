@@ -99,12 +99,23 @@ def execute_validated(
         fetched = result.fetchmany(query.max_rows + 1)
         truncated = len(fetched) > query.max_rows
         encodings: list[ResultEncoding | None] = [None] * len(query.outputs)
+        suppressed = [False] * len(query.outputs)
+        threshold = query.min_count_cell
         rows: list[tuple[Any, ...]] = []
         for raw in fetched[: query.max_rows]:
             cells: list[Any] = []
             for index, (plan, value) in enumerate(zip(query.outputs, tuple(raw), strict=True)):
                 if value is None:
                     cells.append(None)
+                elif threshold and plan.kind == "count":
+                    if type(value) is not int:
+                        raise _unsupported_result()
+                    if 0 < value < threshold:
+                        suppressed[index] = True
+                        cells.append(None)
+                    else:
+                        encodings[index] = "json"
+                        cells.append(value)
                 elif plan.protected:
                     cells.append(codec.encrypt(value, plan.domain))
                 else:
@@ -122,7 +133,11 @@ def execute_validated(
             plan.label,
             plan.source,
             plan.protected,
-            "token" if plan.protected else (encodings[index] or "json"),
+            "token"
+            if plan.protected
+            else "suppressed"
+            if suppressed[index]
+            else (encodings[index] or "json"),
         )
         for index, plan in enumerate(query.outputs)
     )

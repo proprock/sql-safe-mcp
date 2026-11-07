@@ -1043,3 +1043,20 @@ def test_token_ttl_is_off_by_default_and_bounded(tmp_path: Path) -> None:
         with pytest.raises(DomainError) as raised:
             load_config(_write(tmp_path, text), env)
         assert "token_ttl_seconds" in raised.value.public_message
+
+
+def test_min_count_cell_is_off_by_default_and_bounded(tmp_path: Path) -> None:
+    env = {"KEY_ONE": _key(1)}
+    default = load_config(_write(tmp_path, _ttl_config()), env)
+    edges = [
+        load_config(_write(tmp_path, _ttl_config(f"runtime: {{min_count_cell: {k}}}\n")), env)
+        for k in (0, 1000)
+    ]
+
+    assert default.runtime.min_count_cell == 0
+    assert [config.runtime.min_count_cell for config in edges] == [0, 1000]
+    for bad in (-1, 1001, "true", 2.5):
+        text = _ttl_config(f"runtime: {{min_count_cell: {bad}}}\n")
+        with pytest.raises(DomainError) as raised:
+            load_config(_write(tmp_path, text), env)
+        assert "min_count_cell" in raised.value.public_message

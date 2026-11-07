@@ -101,7 +101,9 @@ class StoredProcedureDefinition(OutputModel):
     definition_available: bool
 
 
-ResultEncoding = Literal["json", "token", "decimal", "date", "time", "datetime", "uuid", "base64"]
+ResultEncoding = Literal[
+    "json", "token", "decimal", "date", "time", "datetime", "uuid", "base64", "suppressed"
+]
 
 
 class ColumnSource(OutputModel):
