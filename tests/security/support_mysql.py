@@ -56,7 +56,7 @@ def mysql_config(engine: str = "mysql") -> AppConfig:
         return {
             "engine": engine,
             "access_level": "all_pii_safe",
-            "connection_url": "mysql+pymysql://u:p@db/app",
+            "connection_url": "mysql+pymysql://u:p@db/app?ssl_ca=/ca.pem",
             "pii_key_env": key_env,
             "pii_key": base64.b64encode(key).decode(),
             "pii": {

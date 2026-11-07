@@ -23,7 +23,7 @@ def _config() -> AppConfig:
         servers={
             "legacy": ServerConfig(
                 engine="sqlserver",
-                connection_url=SecretStr("mssql+pyodbc://u:p@sql/master?driver=x"),
+                connection_url=SecretStr("mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes"),
             )
         },
     )
@@ -139,17 +139,17 @@ def _secure_config() -> AppConfig:
             "servers": {
                 "legacy": {
                     "engine": "sqlserver",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                 },
                 "code": {
                     "engine": "sqlserver",
                     "access_level": "meta_and_code",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                 },
                 "secure": {
                     "engine": "sqlserver",
                     "access_level": "all_pii_safe",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                     "pii_key_env": "K",
                     "pii_key": base64.b64encode(KEY).decode(),
                     "pii": {
@@ -166,7 +166,7 @@ def _secure_config() -> AppConfig:
                 "peds": {
                     "engine": "sqlserver",
                     "access_level": "all_pii_safe",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                     "pii_key_env": "PK",
                     "pii_key": base64.b64encode(bytes(range(1, 33))).decode(),
                     "pii": {

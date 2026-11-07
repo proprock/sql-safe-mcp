@@ -367,6 +367,7 @@ def test_live_shared_pii_rules_apply_only_after_config_resolution(
                     "mssql": {
                         "engine": "sqlserver",
                         "access_level": "all_pii_safe",
+                        "require_tls": False,
                         "connection_url": url(live_database.config, "secure"),
                         "pii_key_env": "MATRIX_MSSQL_KEY",
                     },
@@ -374,6 +375,7 @@ def test_live_shared_pii_rules_apply_only_after_config_resolution(
                         alias: {
                             "engine": live.engine,
                             "access_level": "all_pii_safe",
+                            "require_tls": False,
                             "connection_url": url(live.sql_config, "secure"),
                             "pii_key_env": key_name,
                             "pii": {
@@ -490,6 +492,7 @@ def test_live_deny_by_default_and_deny_list_on_three_engines(
         base = {
             "engine": engine,
             "access_level": "all_pii_safe",
+            "require_tls": False,
             "connection_url": url(source, source_alias),
             "pii_key_env": key_name,
         }

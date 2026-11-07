@@ -21,7 +21,7 @@ def _server(pii: dict[str, object]) -> AppConfig:
                 "clinic": {
                     "engine": "mysql",
                     "access_level": "all_pii_safe",
-                    "connection_url": "mysql+pymysql://u:p@host/clinic",
+                    "connection_url": "mysql+pymysql://u:p@host/clinic?ssl_ca=/ca.pem",
                     "pii_key_env": "K",
                     "pii_key": base64.b64encode(b"k" * 32).decode(),
                     "pii": pii,

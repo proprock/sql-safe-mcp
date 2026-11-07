@@ -158,6 +158,7 @@ class ServerConfigBase(BaseModel):
     connection_url: SecretStr
     pii_key_env: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]*$")
     pii_key: SecretStr | None = Field(default=None, exclude=True)
+    require_tls: bool = Field(default=True, strict=True)
 
     @model_validator(mode="after")
     def validate_connection_url(self) -> ServerConfigBase:
@@ -183,6 +184,60 @@ class ServerConfigBase(BaseModel):
         return base64.b64decode(self.pii_key.get_secret_value(), validate=True)
 
 
+_TLS_ERROR = "all_pii_safe servers require verified TLS: "
+# Allowlists: only these values prove an encrypted connection with a checked certificate.
+_MSSQL_ENCRYPT_ON = frozenset({"yes", "true", "mandatory", "strict"})
+_MSSQL_TRUST_OFF = frozenset({"no", "false"})
+# PyMySQL options that replace or weaken the certificate checks SQLAlchemy builds from ssl_ca.
+_MYSQL_TLS_OVERRIDES = ("ssl_verify_cert", "ssl_verify_identity", "ssl_disabled")
+
+
+def _tls_options(url: str) -> dict[str, str]:
+    """Casefolded query options; a repeated option (in any case) is refused."""
+    options: dict[str, str] = {}
+    for name, value in make_url(url).query.items():
+        key = name.casefold()
+        if key in options or not isinstance(value, str):
+            raise ValueError(f"{_TLS_ERROR}connection_url sets {key!r} more than once")
+        options[key] = value
+    return options
+
+
+def _weakened(option: str) -> ValueError:
+    return ValueError(
+        f"{_TLS_ERROR}connection_url option {option!r} disables certificate checks; "
+        "remove it, or set require_tls: false"
+    )
+
+
+def _check_verified_tls(engine: str, url: str) -> None:
+    options = _tls_options(url)
+    if engine == "sqlserver":
+        if "odbc_connect" in options:
+            raise ValueError(
+                f"{_TLS_ERROR}odbc_connect cannot be checked; use URL query options, "
+                "or set require_tls: false"
+            )
+        if options.get("encrypt", "").casefold() not in _MSSQL_ENCRYPT_ON:
+            raise ValueError(
+                f"{_TLS_ERROR}set Encrypt=yes in connection_url, or require_tls: false"
+            )
+        trust = options.get("trustservercertificate")
+        if trust is not None and trust.casefold() not in _MSSQL_TRUST_OFF:
+            raise _weakened("trustservercertificate")
+        return
+    if not options.get("ssl_ca") and not options.get("ssl_capath"):
+        raise ValueError(
+            f"{_TLS_ERROR}set ssl_ca or ssl_capath in connection_url, or require_tls: false"
+        )
+    for option in _MYSQL_TLS_OVERRIDES:
+        if option in options:
+            raise _weakened(option)
+    hostname = options.get("ssl_check_hostname")
+    if hostname is not None and hostname.casefold() != "true":
+        raise _weakened("ssl_check_hostname")
+
+
 class ServerConfig(ServerConfigBase):
     pii: PiiConfig | None = None
 
@@ -194,10 +249,14 @@ class ServerConfig(ServerConfigBase):
             scoped = [*self.pii.rules, *self.pii.exposed_columns, *self.pii.deny]
             if self.engine != "sqlserver" and any(rule.schema_ for rule in scoped):
                 raise ValueError(f"pii rules for engine {self.engine!r} cannot set schema")
+            if self.require_tls:
+                _check_verified_tls(self.engine, self.connection_url.get_secret_value())
         elif self.pii_key_env is not None or self.pii is not None:
             raise ValueError(
                 f"{self.access_level} servers cannot configure pii_key_env or pii rules"
             )
+        elif "require_tls" in self.model_fields_set:
+            raise ValueError(f"{self.access_level} servers cannot configure require_tls")
         return self
 
 

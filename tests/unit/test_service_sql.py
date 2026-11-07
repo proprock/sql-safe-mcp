@@ -94,7 +94,7 @@ class FakeCatalog:
 
 
 def _config(audit: bool = False) -> AppConfig:
-    url = "mssql+pyodbc://user:p%40ss@sql/master?driver=x"
+    url = "mssql+pyodbc://user:p%40ss@sql/master?driver=x&Encrypt=yes"
     return AppConfig.model_validate(
         {
             "version": 1,

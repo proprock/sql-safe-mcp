@@ -270,7 +270,7 @@ def _config(keys: dict[str, bytes | None]) -> AppConfig:
     for alias, key in keys.items():
         server: dict[str, object] = {
             "engine": "sqlserver",
-            "connection_url": "mssql+pyodbc://u:p@h/d?driver=x",
+            "connection_url": "mssql+pyodbc://u:p@h/d?driver=x&Encrypt=yes",
         }
         if key is not None:
             server.update(

@@ -74,7 +74,7 @@ def app_config() -> AppConfig:
         return {
             "engine": "sqlserver",
             "access_level": "all_pii_safe",
-            "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+            "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
             "pii_key_env": key_env,
             "pii_key": base64.b64encode(key).decode(),
             "pii": {

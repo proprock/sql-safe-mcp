@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from sql_safe_mcp.config import AppConfig, load_config
 from sql_safe_mcp.errors import DomainError, ErrorCode
 
-URL = "mssql+pyodbc://u:p@sql/master?driver=x"
+URL = "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes"
 
 
 def _yaml(url: str = URL, extra: str = "", version: int = 1) -> str:

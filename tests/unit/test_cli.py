@@ -129,7 +129,7 @@ servers:
   clinic:
     engine: mysql
     access_level: all_pii_safe
-    connection_url: mysql+pymysql://user:cli-pass-marker@host/clinic
+    connection_url: mysql+pymysql://user:cli-pass-marker@host/clinic?ssl_ca=/ca.pem
     pii_key_env: CLINIC_KEY
     pii:
       rules:

@@ -79,7 +79,7 @@ servers:
     config = load_config(
         path,
         {
-            "URL": "mssql+pyodbc://user:password@sql01/master?driver=ODBC+Driver+18+for+SQL+Server",
+            "URL": "mssql+pyodbc://user:password@sql01/master?driver=x&Encrypt=yes",
             "LEGACY_KEY": _key(1),
         },
     )
@@ -114,9 +114,9 @@ servers:
 """,
         ),
         {
-            "TABLES_URL": "mssql+pyodbc://u:p@tables/master?driver=x",
-            "ROUTINES_URL": "mssql+pyodbc://u:p@routines/master?driver=x",
-            "QUERY_URL": "mssql+pyodbc://u:p@query/master?driver=x",
+            "TABLES_URL": "mssql+pyodbc://u:p@tables/master?driver=x&Encrypt=yes",
+            "ROUTINES_URL": "mssql+pyodbc://u:p@routines/master?driver=x&Encrypt=yes",
+            "QUERY_URL": "mssql+pyodbc://u:p@query/master?driver=x&Encrypt=yes",
             "QUERY_KEY": _key(1),
         },
     )
@@ -142,7 +142,7 @@ servers:
     )
 
     with pytest.raises(DomainError, match="CONFIG_ERROR"):
-        load_config(path, {"URL": "mssql+pyodbc://u:p@legacy/master?driver=x"})
+        load_config(path, {"URL": "mssql+pyodbc://u:p@legacy/master?driver=x&Encrypt=yes"})
 
 
 def test_resolves_default_named_and_local_pii_rules_in_stable_order(tmp_path: Path) -> None:
@@ -186,8 +186,8 @@ servers:
     config = load_config(
         path,
         {
-            "DEFAULT_URL": "mssql+pyodbc://u:p@default/master?driver=x",
-            "NAMED_URL": "mssql+pyodbc://u:p@named/master?driver=x",
+            "DEFAULT_URL": "mssql+pyodbc://u:p@default/master?driver=x&Encrypt=yes",
+            "NAMED_URL": "mssql+pyodbc://u:p@named/master?driver=x&Encrypt=yes",
             "DEFAULT_KEY": _key(4),
             "NAMED_KEY": _key(5),
         },
@@ -260,7 +260,7 @@ servers:
     with pytest.raises(DomainError, match=message):
         load_config(
             path,
-            {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(6)},
+            {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(6)},
         )
 
 
@@ -282,7 +282,9 @@ servers:
     )
 
     with pytest.raises(DomainError) as raised:
-        load_config(path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(6)})
+        load_config(
+            path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(6)}
+        )
 
     assert raised.value.public_message == (
         "Invalid configuration: at most one unnamed pii rule set is allowed"
@@ -310,7 +312,7 @@ servers:
 
     config = load_config(
         path,
-        {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(7)},
+        {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(7)},
     )
 
     app_pii = config.servers["app"].pii
@@ -340,7 +342,7 @@ servers:
 
     config = load_config(
         path,
-        {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(7)},
+        {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(7)},
     )
 
     pii = config.servers["app"].pii
@@ -361,7 +363,7 @@ servers:
   app:
     engine: {engine}
     access_level: all_pii_safe
-    connection_url: mysql+pymysql://u:p@app/database
+    connection_url: mysql+pymysql://u:p@app/database?ssl_ca=/ca.pem
     pii_key_env: KEY
     pii: {pii}
     """
@@ -430,7 +432,9 @@ servers:
     )
 
     with pytest.raises(DomainError, match=message):
-        load_config(path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(9)})
+        load_config(
+            path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(9)}
+        )
 
 
 def test_default_rules_skip_metadata_and_resolution_continues_to_later_aliases(
@@ -457,8 +461,8 @@ servers:
     config = load_config(
         path,
         {
-            "META_URL": "mssql+pyodbc://u:p@meta/master?driver=x",
-            "APP_URL": "mssql+pyodbc://u:p@app/master?driver=x",
+            "META_URL": "mssql+pyodbc://u:p@meta/master?driver=x&Encrypt=yes",
+            "APP_URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes",
             "KEY": _key(10),
         },
     )
@@ -488,7 +492,7 @@ servers:
     )
 
     with pytest.raises(DomainError) as raised:
-        load_config(path, {"URL": "mssql+pyodbc://u:p@meta/master?driver=x"})
+        load_config(path, {"URL": "mssql+pyodbc://u:p@meta/master?driver=x&Encrypt=yes"})
 
     assert raised.value.public_message == (
         "Invalid configuration: metadata servers cannot configure pii_key_env or pii rules"
@@ -512,7 +516,7 @@ servers:
     )
 
     with pytest.raises(DomainError) as raised:
-        load_config(path, {"URL": "mssql+pyodbc://u:p@routines/master?driver=x"})
+        load_config(path, {"URL": "mssql+pyodbc://u:p@routines/master?driver=x&Encrypt=yes"})
 
     assert raised.value.public_message == (
         "Invalid configuration: meta_and_code servers cannot configure pii_key_env or pii rules"
@@ -540,8 +544,8 @@ servers:
 """,
     )
     env = {
-        "URL_ONE": "mssql+pyodbc://u:p@one/master?driver=x",
-        "URL_TWO": "mssql+pyodbc://u:p@two/master?driver=x",
+        "URL_ONE": "mssql+pyodbc://u:p@one/master?driver=x&Encrypt=yes",
+        "URL_TWO": "mssql+pyodbc://u:p@two/master?driver=x&Encrypt=yes",
         "KEY_ONE": _key(2),
         "KEY_TWO": _key(2),
     }
@@ -566,7 +570,7 @@ servers:
 """,
     )
     env = {
-        "URL": "mssql+pyodbc://u:p@one/master?driver=x",
+        "URL": "mssql+pyodbc://u:p@one/master?driver=x&Encrypt=yes",
         "KEY": base64.b64encode(b"x" * length).decode(),
     }
 
@@ -627,7 +631,7 @@ servers:
   one:
     engine: {engine}
     access_level: all_pii_safe
-    connection_url: mysql+pymysql://user:password@localhost/database
+    connection_url: mysql+pymysql://user:password@localhost/database?ssl_ca=/ca.pem
     pii_key_env: KEY
     pii:
       rules:
@@ -656,7 +660,7 @@ servers:
     engine: sqlserver
     connection_url: ${URL}
 """,
-            {"URL": "mssql+pyodbc://u:p@host/master?driver=x"},
+            {"URL": "mssql+pyodbc://u:p@host/master?driver=x&Encrypt=yes"},
         ),
         (
             """
@@ -703,7 +707,9 @@ servers:
     )
 
     with pytest.raises(DomainError, match="valid base64"):
-        load_config(path, {"URL": "mssql+pyodbc://u:p@host/master?driver=x", "KEY": "!!!"})
+        load_config(
+            path, {"URL": "mssql+pyodbc://u:p@host/master?driver=x&Encrypt=yes", "KEY": "!!!"}
+        )
 
 
 @pytest.mark.parametrize(
@@ -731,7 +737,7 @@ servers:
     with pytest.raises(DomainError, match="CONFIG_ERROR"):
         load_config(
             path,
-            {"URL": "mssql+pyodbc://u:p@host/master?driver=x", "KEY": _key(3)},
+            {"URL": "mssql+pyodbc://u:p@host/master?driver=x&Encrypt=yes", "KEY": _key(3)},
         )
 
 
@@ -852,14 +858,14 @@ servers:
     engine: sqlserver
     connection_url: ${DEV_URL}
 """
-    env = {"DEV_URL": "mssql+pyodbc://sa:p@10.12.11.107:1433/master?driver=x"}
+    env = {"DEV_URL": "mssql+pyodbc://sa:p@10.12.11.107:1433/master?driver=x&Encrypt=yes"}
 
     config = load_config(_write(tmp_path, text), env)
 
     assert make_url(config.servers["dev"].connection_url.get_secret_value()).port == 1433
 
 
-_DENY_ENV = {"URL": "mssql+pyodbc://u:p@peds/master?driver=x", "KEY": _key(7)}
+_DENY_ENV = {"URL": "mssql+pyodbc://u:p@peds/master?driver=x&Encrypt=yes", "KEY": _key(7)}
 
 
 def _peds_config(pii: str, shared: str = "") -> str:
@@ -933,7 +939,7 @@ servers:
       mode: deny-by-default
       {section}: [{{schema: dbo, table: people, columns: [email]}}]
 """
-    env = {**_DENY_ENV, "URL": "mysql+pymysql://u:p@h/db"}
+    env = {**_DENY_ENV, "URL": "mysql+pymysql://u:p@h/db?ssl_ca=/ca.pem"}
     with pytest.raises(DomainError, match="cannot set schema"):
         load_config(_write(tmp_path, text), env)
 
@@ -1011,7 +1017,7 @@ def _ttl_config(runtime: str = "") -> str:
         "  one:\n"
         "    engine: sqlserver\n"
         "    access_level: all_pii_safe\n"
-        "    connection_url: mssql+pyodbc://u:p@one/master?driver=x\n"
+        "    connection_url: mssql+pyodbc://u:p@one/master?driver=x&Encrypt=yes\n"
         "    pii_key_env: KEY_ONE\n"
         '    pii: {rules: [{database: "*", schema: dbo, table: Users, columns: [Email]}]}\n'
     )

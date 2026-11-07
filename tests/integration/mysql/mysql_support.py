@@ -68,6 +68,7 @@ def build_sql_config(
             alias: ServerConfig(
                 engine=engine,
                 access_level="all_pii_safe",
+                require_tls=False,  # the test container has no verified TLS
                 connection_url=SecretStr(url.render_as_string(hide_password=False)),
                 pii_key_env=f"KEY_{alias.upper()}",
                 pii=PiiConfig(

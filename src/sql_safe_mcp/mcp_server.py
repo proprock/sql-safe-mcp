@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from sql_safe_mcp.models import (
 )
 from sql_safe_mcp.service import DatabaseService
 
+logger = logging.getLogger(__name__)
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
 
@@ -49,6 +51,11 @@ def create_server(config: AppConfig) -> MCPServer[AppContext]:
             registry.dispose()
 
     configure_logging(config.logging.level, config.logging.audit)
+    for alias, configured in config.servers.items():
+        if configured.access_level == "all_pii_safe" and not configured.require_tls:
+            logger.warning(
+                "server=%s require_tls=false: PII may travel without verified TLS", alias
+            )
     server: MCPServer[AppContext] = MCPServer(
         "sql-safe-mcp",
         description="Minimal, read-only, PII-safe SQL database navigation.",
