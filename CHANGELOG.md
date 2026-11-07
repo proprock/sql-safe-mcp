@@ -29,12 +29,13 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 - `pii.rules` entries accept an optional `domain`. A token returned for a column of one domain is
   rejected with `INVALID_PII_TOKEN` when compared with a column of another domain, so protected
-  values cannot be replayed across unrelated columns. Without `domain` the domain stays the server
-  alias and existing configurations and tokens are unchanged. Rules of different domains matching
-  one column reject queries touching it with `QUERY_REJECTED`.
+  values cannot be replayed across unrelated columns. Without `domain` the domain is the server
+  alias. Rules of different domains matching one column reject queries touching it with
+  `QUERY_REJECTED`.
 - PII tokens now pad their payload to a multiple of 32 bytes, so token length reveals only a
-  32-byte bucket of the plaintext length. The `pii:v1:` format is unchanged and tokens issued
-  before this change stay valid.
+  32-byte bucket of the plaintext length.
+- Tokens issued before padding and domains are rejected with `INVALID_PII_TOKEN`; agents must
+  request new tokens.
 - `execute_sql` now allows each SQL construct only in the positions the supported subset uses.
   A bare column or literal used as a condition (`WHERE a`, `ON 1`, `WHERE a AND b = 1`) and any
   other node in an unlisted position is rejected with `QUERY_REJECTED` before the database runs

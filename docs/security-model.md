@@ -15,7 +15,7 @@ this: its tokens are then accepted only on columns of that domain, and any other
 `INVALID_PII_TOKEN`. Tokens are bearer secrets and must not be logged. The token payload is padded to a multiple of 32
 bytes, so a token's length reveals only which 32-byte bucket the plaintext length falls in. That
 bucket remains a residual leak, and a long value (for example a free-text field) still discloses
-its approximate size. Tokens issued before padding existed stay valid.
+its approximate size.
 
 SQL validation is an allowlist. Unknown syntax, cross-database names, unresolved tables or columns,
 unsupported lineage, and unsupported protected-value types fail closed. An alias may name only a

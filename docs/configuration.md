@@ -326,7 +326,7 @@ error as a forged token. For health data prefer one domain per entity (for examp
 
 `domain` uses the alias character set (letters, digits, `.`, `_`, `-`; starts with a letter or
 digit) and is allowed only on `pii.rules`, not on `exposed_columns` or `deny`. Rules without
-`domain` keep the alias-wide domain, and tokens issued before domains existed stay valid there. A
+`domain` keep the alias-wide domain. A
 `domain` equal to the alias is the same as no `domain`. If rules of different domains match the
 same column, `execute_sql` rejects any query that touches that column with `QUERY_REJECTED`
 ("pii rules of different token domains match the same column"); this is detected per query
