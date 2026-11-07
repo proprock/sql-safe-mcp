@@ -240,6 +240,8 @@ Protection covers the columns you list, so list every column that holds personal
   limits, and logging.
 - [Tool reference](docs/tools.md) - arguments, responses, errors, and the accepted SQL subset.
 - [Security model](docs/security-model.md) - trust boundaries, guarantees, limitations, and verification.
+- [Health data of minors](docs/health-data.md) - requirements, mechanisms, and an operator
+  checklist for medical deployments.
 - [Checks](docs/checks.md) - local, integration, and security verification commands.
 
 ## Security

@@ -39,7 +39,10 @@ Problems in this server's own code, such as:
 - a PII token that decrypts under another server alias, or protected values leaving an `all_pii_safe`
   server in the clear;
 - a configuration that is accepted but weaker than it declares, such as a duplicated PII key;
-- an unknown or unresolved construct that is allowed instead of refused.
+- an unknown or unresolved construct that is allowed instead of refused;
+- partial disclosure of a protected value beyond what
+  [security-model.md](docs/security-model.md) documents as residual, for example a token whose
+  length reveals more than its 32-byte bucket, or tokens of equal values that match offline.
 
 ## Out of scope
 
