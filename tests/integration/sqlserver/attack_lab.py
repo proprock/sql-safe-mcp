@@ -22,7 +22,14 @@ from pydantic import SecretStr
 from sqlalchemy import Connection, Engine, create_engine, event, text
 from sqlalchemy.engine import URL, make_url
 
-from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, RuntimeConfig, ServerConfig
+from sql_safe_mcp.config import (
+    AppConfig,
+    PiiConfig,
+    PiiRule,
+    PiiScopeRule,
+    RuntimeConfig,
+    ServerConfig,
+)
 from sql_safe_mcp.db import registry as registry_module
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.service import DatabaseService
@@ -142,12 +149,14 @@ def _build_database(admin: Engine, database: str, suffix: str, writer: str) -> N
                     "CREATE TABLE dbo.[Contacts] ([Id] int PRIMARY KEY, [Email] nvarchar(100))",
                     "CREATE TABLE dbo.[Canary] ([Id] int NOT NULL, [Note] nvarchar(50))",
                     "CREATE TABLE dbo.[Items] ([Id] int NOT NULL)",
+                    "CREATE TABLE dbo.[Visits] ([Id] int PRIMARY KEY, [Hits] int NOT NULL)",
                     "CREATE TABLE [sales].[Items] ([Id] int NOT NULL)",
                     f"CREATE USER {quote_identifier(writer)} FOR LOGIN {quote_identifier(writer)}",
                     f"ALTER ROLE db_owner ADD MEMBER {quote_identifier(writer)}",
                     "INSERT INTO dbo.[Canary] VALUES (1, N'canary-" + suffix + "')",
                     "INSERT INTO dbo.[Contacts] VALUES (1, N'contact-" + suffix + "@example.test')",
                     "INSERT INTO dbo.[Items] VALUES (1)",
+                    "INSERT INTO dbo.[Visits] VALUES (1, 424242), (2, 515151)",
                     "INSERT INTO [sales].[Items] VALUES (2)",
                 ],
             )
@@ -167,13 +176,16 @@ def _pii_server(url: str, key: bytes, key_env: str, databases: tuple[str, str]) 
     return ServerConfig(
         engine="sqlserver",
         access_level="all_pii_safe",
+        require_tls=False,  # the test container uses a self-signed certificate
         connection_url=SecretStr(url),
         pii_key_env=key_env,
         pii=PiiConfig(
             rules=[
                 PiiRule(database="*", schema="dbo", table="Users", columns=["Email", "Phone"]),
+                PiiRule(database="*", schema="dbo", table="Visits", columns=["Hits"]),
                 PiiRule(database=databases[0], schema="dbo", table="Orders", columns=["Total"]),
-            ]
+            ],
+            deny=[PiiScopeRule(schema="dbo", table="Contacts", columns=["*"])],
         ),
         pii_key=SecretStr(base64.b64encode(key).decode()),
     )

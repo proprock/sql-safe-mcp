@@ -1,16 +1,20 @@
 from collections.abc import Sequence
+from datetime import date, datetime
+from decimal import Decimal
 from typing import ClassVar
 
 import pytest
 from sqlglot import exp
+from typed_columns import typed
 
-from sql_safe_mcp.config import PiiConfig, PiiRule
+from sql_safe_mcp.config import PiiConfig, PiiRule, PiiScopeRule
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.dialect import SQLSERVER
 from sql_safe_mcp.security.lineage import SourceColumn, analyze_query
 from sql_safe_mcp.security.parser import ParserLimits, parse_select
 from sql_safe_mcp.security.policy import PiiPolicy, PolicyDecision
-from sql_safe_mcp.security.schema import resolve_tables
+from sql_safe_mcp.security.reasons import Reason
+from sql_safe_mcp.security.schema import ColumnSchema, TypeClass, resolve_tables
 from sql_safe_mcp.security.tokens import TokenCodec
 
 LIMITS = ParserLimits(4096, 500, 4, 10)
@@ -36,8 +40,8 @@ class Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return self.tables[(schema, table)]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(self.tables[(schema, table)])
 
 
 def token(value: object, codec: TokenCodec = CODEC) -> str:
@@ -101,6 +105,12 @@ REJECTED = {
     "token in unprotected column": f"SELECT Id FROM Users WHERE Name = {token('a')}",
     "token in select list": f"SELECT {token('a')} FROM Users",
     "token compared to unprotected number": f"SELECT Id FROM Users WHERE Id = {token(1)}",
+    "integer token against string column": f"SELECT Id FROM Users WHERE Email = {token(1)}",
+    "string token against decimal column": f"SELECT Id FROM Orders WHERE Total = {token('1')}",
+    "integer token against decimal column": f"SELECT Id FROM Orders WHERE Total = {token(1)}",
+    "mixed token types in list": (
+        f"SELECT Id FROM Users WHERE Email IN ({token('a')}, {token(1)})"
+    ),
 }
 
 
@@ -181,14 +191,16 @@ def test_table_patterns_are_case_insensitive_full_matches(
         CODEC,
     )
 
-    assert policy.is_protected(SourceColumn("dbo", matching_table.lower(), "email"))
-    assert not policy.is_protected(SourceColumn("dbo", other_table, "email"))
-    assert not policy.is_protected(SourceColumn("dbo", matching_table, "phone"))
+    assert policy.protected_domain(SourceColumn("dbo", matching_table.lower(), "email")) == "srv"
+    assert policy.protected_domain(SourceColumn("dbo", other_table, "email")) is None
+    assert policy.protected_domain(SourceColumn("dbo", matching_table, "phone")) is None
 
 
 def test_token_sites_carry_decrypted_values_without_exposing_them_in_repr() -> None:
-    decision = evaluate(f"SELECT Id FROM Users WHERE Phone IN ({token('555-0100')}, {token(42)})")
-    assert [site.value for site in decision.token_sites] == ["555-0100", 42]
+    decision = evaluate(
+        f"SELECT Id FROM Users WHERE Phone IN ({token('555-0100')}, {token('555-0101')})"
+    )
+    assert [site.value for site in decision.token_sites] == ["555-0100", "555-0101"]
     assert all(isinstance(site.literal, exp.Literal) for site in decision.token_sites)
     assert "555-0100" not in repr(decision)
 
@@ -213,3 +225,248 @@ def test_policy_does_not_touch_the_query() -> None:
     before = analyzed.query.sql("tsql")
     PiiPolicy("d", CONFIG, CODEC).evaluate(analyzed)
     assert analyzed.query.sql("tsql") == before
+
+
+TYPED_CONFIG = PiiConfig(
+    rules=[
+        PiiRule(
+            database="*",
+            schema="dbo",
+            table="Facts",
+            columns=["Visits", "Amount", "Seen", "Blob", "Note"],
+        )
+    ]
+)
+TYPED_COLUMNS: dict[str, TypeClass] = {
+    "Id": "integer",
+    "Visits": "integer",
+    "Amount": "decimal",
+    "Seen": "datetime",
+    "Blob": "binary",
+    "Note": "other",
+}
+
+
+class TypedCatalog:
+    def list_tables(self) -> list[tuple[str, str]]:
+        return [("dbo", "Facts")]
+
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return [ColumnSchema(name, kind) for name, kind in TYPED_COLUMNS.items()]
+
+
+def evaluate_typed(sql: str) -> PolicyDecision:
+    query = parse_select(sql, LIMITS)
+    analyzed = analyze_query(query, resolve_tables(query, TypedCatalog()), LIMITS, SQLSERVER)
+    return PiiPolicy("sales", TYPED_CONFIG, CODEC).evaluate(analyzed)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("Visits", 7),
+        ("Amount", Decimal("1.50")),
+        ("Seen", datetime(2026, 1, 2, 3, 4, 5)),
+        ("Blob", b"ab"),
+    ],
+)
+def test_token_of_the_column_type_is_accepted(column: str, value: object) -> None:
+    decision = evaluate_typed(f"SELECT Id FROM Facts WHERE {column} = {token(value)}")
+    assert [site.value for site in decision.token_sites] == [value]
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("Visits", "7"),
+        ("Visits", Decimal("7")),
+        ("Visits", 7.0),
+        ("Visits", True),
+        ("Amount", 7),
+        ("Amount", "1.50"),
+        ("Amount", 1.5),
+        ("Seen", date(2026, 1, 2)),
+        ("Blob", "00"),
+        ("Note", "anything"),
+        ("Note", 1),
+    ],
+)
+def test_token_of_another_type_is_rejected(column: str, value: object) -> None:
+    with pytest.raises(DomainError) as info:
+        evaluate_typed(f"SELECT Id FROM Facts WHERE {column} = {token(value)}")
+    assert info.value.code is ErrorCode.QUERY_REJECTED
+    assert str(Reason.TOKEN_TYPE_MISMATCH.value) in str(info.value)
+
+
+def test_forged_token_keeps_priority_over_the_type_check() -> None:
+    with pytest.raises(DomainError) as info:
+        evaluate_typed(f"SELECT Id FROM Facts WHERE Visits = {token(7, FOREIGN)}")
+    assert info.value.code is ErrorCode.INVALID_PII_TOKEN
+
+
+DOMAIN_CONFIG = PiiConfig(
+    rules=[
+        PiiRule(database="*", table="Users", columns=["Email"], domain="contact"),
+        PiiRule(database="*", table="Users", columns=["Phone"], domain="contact"),
+        PiiRule(database="*", table="Orders", columns=["Total"], domain="money"),
+        PiiRule(database="*", table="Users", columns=["Name"]),
+    ]
+)
+
+
+def evaluate_domains(sql: str, config: PiiConfig = DOMAIN_CONFIG) -> PolicyDecision:
+    query = parse_select(sql, LIMITS)
+    analyzed = analyze_query(query, resolve_tables(query, Catalog()), LIMITS, SQLSERVER)
+    return PiiPolicy("sales", config, CODEC).evaluate(analyzed)
+
+
+def domain_token(value: object, domain: str | None) -> str:
+    return f"'{CODEC.encrypt(value, domain)}'"
+
+
+def test_decision_reports_the_domain_of_each_output() -> None:
+    decision = evaluate_domains("SELECT Id, Email, Name FROM Users")
+    assert decision.domains == (None, "contact", "srv")
+
+
+def test_token_is_accepted_within_its_domain() -> None:
+    decision = evaluate_domains(
+        f"SELECT Id FROM Users WHERE Email = {domain_token('a', 'contact')} "
+        f"OR Phone IN ({domain_token('b', 'contact')})"
+    )
+    assert [site.value for site in decision.token_sites] == ["a", "b"]
+
+
+def test_default_domain_token_is_accepted_for_a_rule_without_domain() -> None:
+    decision = evaluate_domains(f"SELECT Id FROM Users WHERE Name = {domain_token('n', None)}")
+    assert [site.value for site in decision.token_sites] == ["n"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        f"SELECT Id FROM Orders WHERE Total = {domain_token('x', 'contact')}",
+        f"SELECT Id FROM Users WHERE Email = {domain_token('x', 'money')}",
+        f"SELECT Id FROM Users WHERE Email = {domain_token('x', None)}",
+        f"SELECT Id FROM Users WHERE Name = {domain_token('x', 'contact')}",
+    ],
+)
+def test_token_of_another_domain_is_an_invalid_token(sql: str) -> None:
+    with pytest.raises(DomainError) as info:
+        evaluate_domains(sql)
+    assert info.value.code is ErrorCode.INVALID_PII_TOKEN
+
+
+def test_rules_of_different_domains_on_one_column_conflict() -> None:
+    config = PiiConfig(
+        rules=[
+            PiiRule(database="*", table="Users", columns=["Email"], domain="contact"),
+            PiiRule(database="*", table="Us*", columns=["Email"], domain="money"),
+        ]
+    )
+    with pytest.raises(DomainError) as info:
+        evaluate_domains("SELECT Email FROM Users", config)
+    assert info.value.code is ErrorCode.QUERY_REJECTED
+    assert Reason.DOMAIN_CONFLICT.value in info.value.public_message
+
+
+def test_rules_of_the_same_domain_on_one_column_do_not_conflict() -> None:
+    config = PiiConfig(
+        rules=[
+            PiiRule(database="*", table="Users", columns=["Email"], domain="contact"),
+            PiiRule(database="*", table="Us*", columns=["Email"], domain="contact"),
+        ]
+    )
+    assert evaluate_domains("SELECT Email FROM Users", config).domains == ("contact",)
+
+
+def test_explicit_alias_domain_equals_the_default_domain() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"], domain="srv")]
+    )
+    decision = evaluate_domains(f"SELECT Id FROM Users WHERE Email = {token('a')}", config)
+    assert [site.value for site in decision.token_sites] == ["a"]
+
+
+DENY_CONFIG = PiiConfig(
+    mode="deny-by-default",
+    exposed_columns=[PiiScopeRule(table="Users", columns=["Id"])],
+    deny=[
+        PiiScopeRule(table="Contacts", columns=["*"]),
+        PiiScopeRule(table="Users", columns=["Phone"]),
+    ],
+)
+
+
+def evaluate_deny(sql: str, config: PiiConfig = DENY_CONFIG) -> PolicyDecision:
+    query = parse_select(sql, LIMITS)
+    analyzed = analyze_query(query, resolve_tables(query, Catalog()), LIMITS, SQLSERVER)
+    return PiiPolicy("sales", config, CODEC).evaluate(analyzed)
+
+
+def test_deny_by_default_protects_unlisted_and_exposes_listed_columns() -> None:
+    assert evaluate_deny("SELECT Id, Email, Name FROM Users").protected == (False, True, True)
+    assert evaluate_deny("SELECT Total FROM Orders").protected == (True,)
+
+
+def test_deny_by_default_star_tokenizes_unlisted_columns() -> None:
+    decision = evaluate_deny(
+        "SELECT * FROM Users",
+        PiiConfig(
+            mode="deny-by-default", exposed_columns=[PiiScopeRule(table="Users", columns=["Id"])]
+        ),
+    )
+    assert decision.protected == (False, True, True, True)
+
+
+def test_protect_mode_ignores_exposed_columns() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        exposed_columns=[PiiScopeRule(table="Users", columns=["Email"])],
+    )
+    assert evaluate_deny("SELECT Email FROM Users", config).protected == (True,)
+
+
+def test_exposed_columns_match_database_schema_and_table_pattern() -> None:
+    config = PiiConfig(
+        mode="deny-by-default",
+        exposed_columns=[
+            PiiScopeRule(database="other", schema="dbo", table="Us*", columns=["Name"])
+        ],
+    )
+    assert evaluate_deny("SELECT Name FROM Users", config).protected == (True,)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT Phone FROM Users",
+        "SELECT Phone AS p FROM Users",
+        "SELECT Id FROM Users WHERE Phone = 'x'",
+        "SELECT Id FROM Users ORDER BY Phone",
+        "SELECT u.Id FROM Users u JOIN Contacts c ON c.Id = u.Id",
+        "SELECT * FROM Users",
+        "SELECT u.* FROM Users u",
+        "SELECT * FROM Contacts",
+        "SELECT Id FROM Contacts WHERE Id = 1",
+    ],
+)
+def test_denied_column_is_rejected_in_every_position(sql: str) -> None:
+    with pytest.raises(DomainError) as info:
+        evaluate_deny(sql)
+    assert info.value.code is ErrorCode.QUERY_REJECTED
+    assert Reason.COLUMN_DENIED.value in info.value.public_message
+
+
+def test_deny_takes_priority_over_protection_rules() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        deny=[PiiScopeRule(table="Users", columns=["Email"])],
+    )
+    with pytest.raises(DomainError) as info:
+        evaluate_deny("SELECT Email FROM Users", config)
+    assert Reason.COLUMN_DENIED.value in info.value.public_message
+
+
+def test_count_star_does_not_reference_denied_columns() -> None:
+    assert evaluate_deny("SELECT COUNT(*) FROM Contacts").protected == (False,)

@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlglot import exp
 from support import KEY, OWN, RUNTIME, Catalog, SpyConnection, SpyResult, validate
+from typed_columns import typed
 
 import sql_safe_mcp.security.schema as schema_module
 import sql_safe_mcp.security.validated_query as vq_module
@@ -29,6 +30,7 @@ from sql_safe_mcp.security.parser import (
 from sql_safe_mcp.security.policy import PiiPolicy, PolicyDecision
 from sql_safe_mcp.security.reasons import Reason
 from sql_safe_mcp.security.schema import (
+    ColumnSchema,
     ReflectedCatalog,
     SchemaCache,
     TableSchema,
@@ -107,9 +109,9 @@ def test_rows_must_match_the_output_plan_width() -> None:
 
 
 def _forge(payload: dict[str, Any] | bytes) -> str:
-    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    body = payload if isinstance(payload, bytes) else json.dumps({**payload, "p": ""}).encode()
     nonce = bytes(12)
-    sealed = AESGCM(KEY).encrypt(nonce, body, b"pii:v1\x00srv")
+    sealed = AESGCM(KEY).encrypt(nonce, body, b"pii:v1\x00srv\x00srv")
     return "pii:v1:" + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
 
 
@@ -183,9 +185,9 @@ class StubInspector:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
 
-    def get_columns(self, table: str, schema: str | None = None) -> list[dict[str, str]]:
+    def get_columns(self, table: str, schema: str | None = None) -> list[dict[str, Any]]:
         self.calls.append((table, schema))
-        return [{"name": f"{schema}.{table}.c"}]
+        return [{"name": f"{schema}.{table}.c", "type": sa.String()}]
 
 
 def test_columns_are_reflected_per_schema_and_cached_per_table(
@@ -196,10 +198,10 @@ def test_columns_are_reflected_per_schema_and_cached_per_table(
     catalog = ReflectedCatalog(
         sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", "d"
     )
-    assert catalog.columns("sales", "Items") == ("sales.Items.c",)
-    assert catalog.columns("dbo", "Items") == ("dbo.Items.c",)
-    assert catalog.columns("sales", "Items") == ("sales.Items.c",)
-    assert catalog.columns("sales", "Other") == ("sales.Other.c",)
+    assert catalog.columns("sales", "Items") == (ColumnSchema("sales.Items.c", "string"),)
+    assert catalog.columns("dbo", "Items") == (ColumnSchema("dbo.Items.c", "string"),)
+    assert catalog.columns("sales", "Items") == (ColumnSchema("sales.Items.c", "string"),)
+    assert catalog.columns("sales", "Other") == (ColumnSchema("sales.Other.c", "string"),)
     assert inspector.calls == [("Items", "sales"), ("Items", "dbo"), ("Other", "sales")]
 
 
@@ -269,8 +271,8 @@ def _tables(*tables: TableSchema) -> Sequence[TableSchema]:
     return tables
 
 
-USERS = TableSchema("dbo", "Users", ("Id", "Name"))
-ORDERS = TableSchema("dbo", "Orders", ("Id", "UserId"))
+USERS = TableSchema("dbo", "Users", tuple(typed(["Id", "Name"])))
+ORDERS = TableSchema("dbo", "Orders", tuple(typed(["Id", "UserId"])))
 
 
 def test_the_cross_check_accepts_a_fully_resolved_query() -> None:
@@ -493,12 +495,13 @@ def test_a_none_schema_from_reflection_becomes_an_empty_schema(
 
 
 def test_a_bare_protected_column_used_as_a_predicate_is_rejected() -> None:
-    rules = [PiiRule(database="*", schema="dbo", table="Users", columns=["Name"])]
-    query = parse_select("SELECT Id FROM Users WHERE Name", LIMITS)
-    result = analyze_query(query, resolve_tables(query, Catalog()), LIMITS, SQLSERVER)
+    # The position allowlist now rejects a bare column predicate before the policy sees it.
     with pytest.raises(DomainError) as info:
-        PiiPolicy("app", PiiConfig(rules=rules), OWN).evaluate(result)
-    assert info.value.public_message == f"Query rejected: {Reason.PROTECTED_POSITION.value}."
+        parse_select("SELECT Id FROM Users WHERE Name", LIMITS)
+    assert (
+        info.value.public_message
+        == f"Query rejected: {Reason.NODE_UNSUPPORTED.value}: Column in Where."
+    )
 
 
 def test_a_protected_column_inside_an_in_list_is_not_a_token_comparison() -> None:
@@ -528,6 +531,29 @@ def test_a_detached_token_comparison_is_not_inside_a_where_clause() -> None:
         PiiPolicy("app", PiiConfig(rules=rules), OWN).evaluate(
             AnalyzedQuery(exp.select("1"), (), (ref,))
         )
+    assert info.value.public_message == f"Query rejected: {Reason.PROTECTED_POSITION.value}."
+
+
+@pytest.mark.parametrize("clause", ["join", "order", "select"])
+def test_a_where_above_on_order_or_a_subquery_does_not_make_the_column_a_where_operand(
+    clause: str,
+) -> None:
+    # Hand-built: the parser never nests these under WHERE, so policy must refuse them by itself.
+    from sql_safe_mcp.security.lineage import AnalyzedQuery, ColumnRef, SourceColumn
+
+    column = exp.column("Email", table="u")
+    comparison = exp.EQ(this=column, expression=exp.Literal.string(OWN.encrypt("value")))
+    inner = {
+        "join": lambda: exp.Join(this=exp.to_table("Users"), on=comparison),
+        "order": lambda: exp.Order(expressions=[exp.Ordered(this=comparison)]),
+        "select": lambda: exp.select(comparison),
+    }[clause]()
+    query = exp.select("1")
+    query.set("where", exp.Where(this=inner))
+    ref = ColumnRef(column, SourceColumn("dbo", "Users", "Email", "string"))
+    rules = [PiiRule(database="*", table="Users", columns=["Email"])]
+    with pytest.raises(DomainError) as info:
+        PiiPolicy("app", PiiConfig(rules=rules), OWN).evaluate(AnalyzedQuery(query, (), (ref,)))
     assert info.value.public_message == f"Query rejected: {Reason.PROTECTED_POSITION.value}."
 
 

@@ -62,11 +62,31 @@ jobs:
 
       # Docker-backed SQL Server integration tests are intentionally excluded
       # from hosted CI. They remain an opt-in local gate in docs/checks.md.
-      - name: pytest (unit and contract)
-        run: uv run pytest tests/unit tests/contract -q
+      # Deterministic fast Hypothesis profile; the expensive `deep` tests stay a local release gate.
+      - name: pytest --cov (unit, contract and security)
+        env:
+          HYPOTHESIS_PROFILE: security-fast
+        run: >-
+          uv run pytest tests/unit tests/contract tests/security -m "not deep" -q
+          --cov=sql_safe_mcp --cov-branch --cov-report=term-missing --cov-fail-under=95
 
-      - name: pytest --cov (unit and contract)
-        run: uv run pytest tests/unit tests/contract --cov=sql_safe_mcp --cov-branch --cov-report=term-missing
+  dependency-audit:
+    name: Dependency audit
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          python-version: "3.12"
+
+      - name: pip-audit (locked dependencies)
+        run: |
+          uv export --locked --no-emit-project --format requirements-txt -o /tmp/requirements.txt
+          uvx pip-audit --requirement /tmp/requirements.txt --no-deps --disable-pip
 
   package:
     name: Build and verify distribution

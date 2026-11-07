@@ -48,6 +48,32 @@ sql-safe-mcp --check-config
 
 Errors name the missing or invalid setting without printing a URL, key, or secret.
 
+## Verifying PII rules against the real schema
+
+A misspelled table or column in a PII rule silently protects nothing. Before starting the server,
+check the rules against the live databases:
+
+```bash
+sql-safe-mcp --verify-pii-rules
+sql-safe-mcp --verify-pii-rules --strict
+```
+
+For every `all_pii_safe` alias the command connects to each database named in its rules (to every
+visible database for `"*"`), reflects tables and columns, and prints to stderr, per rule, how many
+tables and columns it matched. `pii.exposed_columns` and `pii.deny` entries are checked the same
+way, so a misspelled `deny` entry that would silently deny nothing is reported. An entry that
+matches nothing prints `WARNING`; with `--strict` the
+command then exits 2. A database that cannot be reached or reflected prints `ERROR` and exits 2
+with or without `--strict`. Only object names are printed, never URLs, keys, or rows.
+
+The command also prints `WARNING: unprotected column looks personal` for every column no rule
+protects whose name contains one of (with `deny-by-default`, only columns in `exposed_columns`
+are checked, and denied columns never are): `email`, `phone`, `mobile`, `ssn`, `passport`, `dob`,
+`birth`, `address`, `zip`, `postal`, `name`, `diagnos`, `icd`, `mrn`, `guardian`, `ip_`, `device`,
+`photo`, `notes`. This list is fixed and name-based: it misses misspelled or opaque names, flags
+harmless ones, and never changes the exit code. It is a hint, not a guarantee that no personal
+data is exposed.
+
 ## Top-level keys
 
 | Key | Meaning |
@@ -76,8 +102,10 @@ servers:
 | `engine` | `sqlserver` (`mssql+pyodbc`), `mysql` or `mariadb` (both `mysql+pymysql`). MySQL and MariaDB have no schema level: `schema` is always `null`, and a `pii` rule for them must not set `schema` (the table is matched by `database` and `table`). |
 | `access_level` | `metadata` (default: navigation and table structure), `meta_and_code` (also stored procedures), or `all_pii_safe` (also `execute_sql`). `pii_safe` is not accepted. |
 | `connection_url` | Required. A SQLAlchemy `mssql+pyodbc://` (SQL Server) or `mysql+pymysql://` (MySQL, MariaDB) URL whose dialect must match `engine`. Treated as a secret. |
-| `pii_key_env` | Required for `all_pii_safe`, forbidden otherwise. The name of the environment variable holding the alias key; matches `^[A-Z_][A-Z0-9_]*$`. |
+| `pii_key_env` | For `all_pii_safe`, set this or `pii_key_file`; forbidden otherwise. The name of the environment variable holding the alias key; matches `^[A-Z_][A-Z0-9_]*$`. |
+| `pii_key_file` | For `all_pii_safe`, set this or `pii_key_env`; forbidden otherwise. Path to a file holding the alias key; see [Key file or environment variable](#key-file-or-environment-variable). |
 | `pii` | Required for `all_pii_safe`, forbidden otherwise. Holds `rules`; see [PII rules](#pii-rules). |
+| `require_tls` | `all_pii_safe` only, default `true`: `connection_url` must request verified TLS. `false` turns the check off and logs a warning at startup; see [Verified TLS](#verified-tls). Forbidden on other access levels. |
 
 ### `connection_url`
 
@@ -113,7 +141,7 @@ connection_url: >-
 | `SQLSERVER_DATABASE` | Database to connect to, for example `master` or `Reporting`. Database permissions still control what the server can read. |
 | `driver` | Required ODBC driver name. It must name an installed driver; spaces are written as `+` because this is a URL. `ODBC+Driver+18+for+SQL+Server` is the usual value for Driver 18. |
 | `Encrypt=yes` | Requests an encrypted connection. Keep it enabled for normal deployments. |
-| `TrustServerCertificate=no` | Requires certificate validation. Set it to `yes` only when a controlled development environment deliberately uses a certificate that cannot be validated. |
+| `TrustServerCertificate=no` | Requires certificate validation. Set it to `yes` only when a controlled development environment deliberately uses a certificate that cannot be validated; an `all_pii_safe` alias then also needs `require_tls: false`. |
 
 Other query options are ODBC connection attributes. Use only options required by the server or
 your organization's connection policy; they remain part of the secret URL when using a whole-value
@@ -139,6 +167,7 @@ connection_url: >-
 | `MYSQL_DATABASE` | Database (catalog) to connect to. MySQL and MariaDB have no separate schema level in this server. |
 | `charset=utf8mb4` | Requests the UTF-8 character set that supports the full Unicode range. Change it only when the database is configured for a different required character set. |
 | `connect_timeout=10` | Limits the driver's connection attempt to 10 seconds. Use a positive number appropriate for the network; it is separate from the YAML `runtime.pool_timeout_seconds`, which limits waiting for a pooled connection. |
+| `ssl_ca=/path/ca.pem` | Not in the example above, but required for an `all_pii_safe` alias: the CA file (or `ssl_capath`, a CA directory) that verifies the server certificate. See [Verified TLS](#verified-tls). |
 
 For either form, if a URL part must be literal rather than a placeholder, URL-encode reserved
 characters in that part. The following [Placeholders](#placeholders) section explains the
@@ -164,8 +193,9 @@ connection_url: "mssql+pyodbc://${DEV_SQL_USER}:${DEV_SQL_PASSWORD}@${DEV_SQL_HO
 
 ## All-PII-safe servers
 
-`all_pii_safe` enables `execute_sql` for a server alias. Such an alias requires its own base64-encoded 32-byte key in the variable named by `pii_key_env`,
-plus at least one effective PII rule. Effective rules can be local under `pii.rules`, inherited
+`all_pii_safe` enables `execute_sql` for a server alias. Such an alias requires its own
+base64-encoded 32-byte key, from a file (`pii_key_file`) or an environment variable
+(`pii_key_env`), plus at least one effective PII rule. Effective rules can be local under `pii.rules`, inherited
 from an unnamed default set, or explicitly included from named shared sets.
 
 ```
@@ -173,10 +203,8 @@ sql-safe-mcp --gen-pii-key
 ```
 
 The command prints one key to stdout and exits without loading the configuration or connecting to a
-database. Store that value in the secret environment or configuration used by your MCP host under
-the variable named by `pii_key_env`; never put it in the YAML file. To generate a separate key for
-each of several aliases, pass a positive count. The command prints exactly that many keys, one per
-line:
+database. Never put the key itself in the YAML file. To generate a separate key for each of several
+aliases, pass a positive count. The command prints exactly that many keys, one per line:
 
 ```
 sql-safe-mcp --gen-pii-key 3
@@ -185,7 +213,55 @@ sql-safe-mcp --gen-pii-key 3
 A key reused by two aliases is rejected. Tokens authenticate the alias as associated data, so
 they cannot cross aliases even if keys are duplicated outside normal config loading. Rotating a key
 or renaming an alias will invalidate existing tokens. `metadata` and `meta_and_code` servers must
-not set `pii_key_env` or `pii`.
+not set `pii_key_env`, `pii_key_file` or `pii`.
+
+### Key file or environment variable
+
+Prefer a key file, such as a secret mount. Set exactly one of the two per alias:
+
+| Setting | Meaning |
+|---|---|
+| `pii_key_file` | Path to a file holding the key. A relative path is resolved against the directory of the YAML file, never against the working directory. Surrounding whitespace, such as the newline that `sql-safe-mcp --gen-pii-key > app.key` writes, is ignored; the file may hold at most 1024 bytes. |
+| `pii_key_env` | Name of an environment variable holding the key. |
+
+On Linux and macOS the key file must be a regular file owned by the server's user or by root, with
+no access for others and no group write: modes `0600`, `0640` and `0440` pass, `0644` fails. A
+Kubernetes secret volume therefore needs `defaultMode: 0440` and an `fsGroup` that the server runs
+in. On Windows only the file's presence and size are checked; restrict it with an ACL.
+
+```
+sql-safe-mcp --gen-pii-key > /etc/sql-safe-mcp/app.key
+chmod 600 /etc/sql-safe-mcp/app.key
+```
+
+After the configuration loads, the server removes every `pii_key_env` variable from its own
+environment, so child processes such as ODBC drivers do not inherit the key. This does not erase
+the environment the process was started with: on Linux, `/proc/<pid>/environ` still shows it to the
+same user and to root. A key file leaves no such copy.
+
+### Verified TLS
+
+An `all_pii_safe` alias returns PII-derived results, so by default its `connection_url` must ask
+the driver for an encrypted connection with a verified server certificate. The check reads the
+URL query options, ignoring case in option names and values; an option given twice is rejected.
+
+| Engine | Required | Rejected |
+|---|---|---|
+| `sqlserver` | `Encrypt` set to `yes`, `true`, `mandatory` or `strict` | `TrustServerCertificate` other than `no` or `false`; `odbc_connect`, which the check cannot read |
+| `mysql`, `mariadb` | `ssl_ca` or `ssl_capath` | `ssl_verify_cert`, `ssl_verify_identity`, `ssl_disabled`; `ssl_check_hostname` other than `true` |
+
+For a development database with a self-signed certificate, set `require_tls: false` on that alias.
+The server then accepts any URL and logs a warning naming the alias at every start. The error and
+the warning never include the URL. `metadata` and `meta_and_code` aliases must not set
+`require_tls`.
+
+### Token lifetime
+
+`runtime.token_ttl_seconds` is off by default: a token stays valid until its key changes. When
+set, each new token records its issue time in whole seconds inside the encrypted payload, and a
+token older than the limit is rejected as `INVALID_PII_TOKEN`. A token issued before the limit was
+set has no issue time and is rejected too, so enabling a TTL invalidates existing tokens. Turning
+the TTL off again accepts every token sealed with the current key.
 
 ### PII rules
 
@@ -280,6 +356,74 @@ pii:
       columns: [email, EMAIL]  # duplicate column
 ```
 
+### Token domains
+
+A token is bound to its server alias and to a token domain. By default the domain is the alias, so
+a token from any protected column of an alias can be compared with any other protected column of
+that alias (for example to join on a protected key). Add `domain` to a `pii.rules` entry to
+narrow this: a token returned for a column in domain `contact` is accepted only in a predicate
+on a column of domain `contact`; anywhere else it is rejected with `INVALID_PII_TOKEN`, the same
+error as a forged token. For health data prefer one domain per entity (for example `patient`,
+`guardian`) so a token cannot be replayed across unrelated columns.
+
+`domain` uses the alias character set (letters, digits, `.`, `_`, `-`; starts with a letter or
+digit) and is allowed only on `pii.rules`, not on `exposed_columns` or `deny`. Rules without
+`domain` keep the alias-wide domain. A
+`domain` equal to the alias is the same as no `domain`. If rules of different domains match the
+same column, `execute_sql` rejects any query that touches that column with `QUERY_REJECTED`
+("pii rules of different token domains match the same column"); this is detected per query
+because it depends on the database schema. Adding, changing, or removing a `domain` invalidates
+tokens already issued for the affected columns.
+
+```yaml
+pii:
+  rules:
+    - {database: "*", table: Patients, columns: [Email, Phone], domain: contact}
+    - {database: "*", table: Billing, columns: [Amount], domain: money}
+```
+
+### Deny-by-default mode and the `deny` list
+
+By default (`pii.mode: protect`) only columns listed in `pii.rules` are protected. For data where
+an unlisted column is itself a risk (medical records, free-text notes), set
+`pii.mode: deny-by-default`. Then every column is protected (returned as a token, compared only
+with tokens) unless `pii.exposed_columns` lists it; `SELECT *` returns tokens for the unlisted
+columns rather than an error. `pii.rules` still protect columns and `pii.exposed_columns` has no
+effect in `protect` mode. Configurations without `mode` behave as before.
+
+`pii.deny` lists columns that cannot be referenced at all, even as tokens: any use in a
+projection, `WHERE`, `ORDER BY`, `JOIN`, or a `*` expansion is rejected with `QUERY_REJECTED`
+and the reason "a denied column cannot be referenced". `deny` wins over `rules` and
+`exposed_columns`. `COUNT(*)` does not reference columns, so it is unaffected.
+
+`exposed_columns` and `deny` entries use the `database`, `schema`, `table`, and `columns` keys
+described above, except that `database` is optional and defaults to `"*"`. `columns: ["*"]` is
+allowed only in `deny` and denies every column of the matching tables. A server using
+`deny-by-default` must be `all_pii_safe`. `include`d shared sets contribute `rules`,
+`exposed_columns`, and `deny` in the same order as `rules`; `mode` is set per alias only.
+
+A deny-by-default alias for a pediatric database:
+
+```yaml
+servers:
+  peds_ro:
+    engine: sqlserver
+    access_level: all_pii_safe
+    connection_url: "${PEDS_SQL_URL}"
+    pii_key_env: PEDS_PII_KEY
+    pii:
+      mode: deny-by-default
+      exposed_columns: # open columns; everything else is a token
+        - table: Visits
+          columns: [VisitId, DepartmentCode, VisitYear]
+      deny: # unreachable even as a token
+        - table: "*"
+          columns: [Notes, Anamnesis, Attachment]
+```
+
+The database login should additionally carry column-level `DENY` on free-text columns; this
+setting is defense in depth, not a replacement for database permissions.
+
 ### Shared PII rule sets
 
 Top-level `pii_rules` is optional. If present, it is a non-empty sequence of strict groups with a
@@ -339,6 +483,8 @@ Optional, under `runtime:`. A value outside its range is a startup error.
 | `pool_timeout_seconds` | 10 | 1-300 |
 | `statement_timeout_seconds` | 30 | 1-3600 |
 | `max_definition_chars` | 262144 | 1024-10000000 |
+| `token_ttl_seconds` | none (tokens do not expire) | 1-315360000; see [Token lifetime](#token-lifetime) |
+| `min_count_cell` | 0 (off) | 0-1000. `execute_sql` returns a `COUNT(*)` value below it, except `0`, as `null` with encoding `suppressed` (see `docs/tools.md`). |
 | `default_max_rows` | 200 | 1-100000, at most `hard_max_rows` |
 | `hard_max_rows` | 1000 | 1-100000 |
 | `max_sql_chars` | 65536 | 256-1000000 |
@@ -358,6 +504,7 @@ hosts show it in their own MCP log or console.
 ```yaml
 logging:
   level: INFO # DEBUG, INFO, WARNING or ERROR (uppercase)
+  audit: false # true writes one audit line per execute_sql call
 ```
 
 | Level | What you see |
@@ -368,7 +515,9 @@ logging:
 
 A failed connection or operation logs the driver error class, the SQLSTATE or numeric code, and the
 driver message. The connection URL's user name and password are replaced with `***` and its host with the
-server alias in that message, control characters are replaced, and long messages are truncated. A `TIMEOUT` or
+server alias in that message. Quoted literals (`'…'`, `N'…'`, `"…"`) become `'***'`, digit runs of six or
+more become `***`, control characters are replaced, and long messages are truncated. A failed `execute_sql`
+logs only the class and the code, never the message, because drivers echo the offending value. A `TIMEOUT` or
 `CONNECTION_FAILED` error shown to the caller carries a `Reference`; the same value appears as
 `reference=` on the matching log line.
 
@@ -376,4 +525,30 @@ Reading a failure: `connect failed ... elapsed_ms=` near the login timeout point
 logging in to the server, while `operation failed` after a `connect ok` points at the query itself.
 
 Connection URLs, credentials, keys, tokens, SQL text, bind values, and result rows are never
-logged. SQLAlchemy's own statement logging stays off at every level.
+logged. SQLAlchemy's own statement logging stays off at every level, and the MCP SDK never logs
+below `INFO`: at `DEBUG` it would write a malformed protocol message whole, with any SQL, token, or
+row in it.
+
+### Audit log
+
+With `audit: true` (default `false`), every `execute_sql` call that reaches the database layer writes
+one `INFO` line to the `sql_safe_mcp.audit` logger, on stderr with the rest, whatever `level` is:
+
+```text
+audit server=secure database=app tables=dbo.Users columns=dbo.Users.Email,dbo.Users.Id protected=1 row_count=2 truncated=False elapsed_ms=12 reference=0f3c9a1e5b7d4c2a8e6f1b3d5a7c9e0f
+```
+
+`tables` and `columns` list every table and column the query reads, including those used only in
+`WHERE` or `JOIN`, as reflected `schema.table[.column]` names, sorted. `protected` is the number of
+returned columns that are PII tokens. `row_count` and `truncated` describe the result. A field with
+nothing to report shows `-`. `reference` is a fresh identifier for the line; when the call failed
+it is the error's `Reference`, if the error has one.
+
+A failed call writes the same line with `code=<ErrorCode>` in place of `row_count` and `truncated`.
+A query rejected before its tables were resolved shows `tables=- columns=- protected=-`. A call
+refused for the server's access level or alias never reaches the database layer and is not audited.
+
+The line holds names and counts only: never SQL text, bind values, result rows, or tokens. Any
+character other than a letter, digit, or one of `.$#@-` in a name, including the caller-supplied
+`database`, is shown as `?`. The line carries no MCP client identity, because the host does not
+pass a verified one.

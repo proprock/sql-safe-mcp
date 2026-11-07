@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -289,6 +290,48 @@ def test_returned_tokens_round_trip_and_are_alias_bound_on_three_engines(
     asyncio.run(scenario())
 
 
+def test_token_domains_are_enforced_on_three_engines(
+    live_database: LiveDatabase,
+    live_mysql_only: LiveMySql,
+    live_mariadb_only: LiveMySql,
+) -> None:
+    cases = _cases(live_database, live_mysql_only, live_mariadb_only)
+    config = _combined(live_database, live_mysql_only, live_mariadb_only)
+    for case in cases:
+        server = config.servers[case.secure]
+        assert server.pii is not None
+        rules = [rule.model_copy(update={"domain": "contact"}) for rule in server.pii.rules]
+        config.servers[case.secure] = server.model_copy(
+            update={"pii": server.pii.model_copy(update={"rules": rules})}
+        )
+
+    async def run(client: Client, case: EngineCase, sql: str) -> Any:
+        return await client.call_tool(
+            "execute_sql",
+            {"server": case.secure, "database": case.sql_database, "sql": sql},
+        )
+
+    async def scenario() -> None:
+        async with Client(create_server(config), raise_exceptions=True) as client:
+            for case in cases:
+                issued = await run(client, case, case.issue_query)
+                assert issued.is_error is False, _text(issued)
+                token = issued.structured_content["rows"][0][0]
+                codec = TokenCodec(case.secure, case.key)
+                assert codec.decrypt(token, "contact") == case.email
+
+                accepted = await run(client, case, case.query.format(token=token))
+                assert accepted.is_error is False, _text(accepted)
+                assert accepted.structured_content["rows"] == [[1]]
+
+                for foreign in (codec.encrypt(case.email), codec.encrypt(case.email, "money")):
+                    rejected = await run(client, case, case.query.format(token=foreign))
+                    assert rejected.is_error is True
+                    assert "INVALID_PII_TOKEN" in _text(rejected)
+
+    asyncio.run(scenario())
+
+
 def test_live_shared_pii_rules_apply_only_after_config_resolution(
     live_database: LiveDatabase,
     live_mysql_only: LiveMySql,
@@ -324,6 +367,7 @@ def test_live_shared_pii_rules_apply_only_after_config_resolution(
                     "mssql": {
                         "engine": "sqlserver",
                         "access_level": "all_pii_safe",
+                        "require_tls": False,
                         "connection_url": url(live_database.config, "secure"),
                         "pii_key_env": "MATRIX_MSSQL_KEY",
                     },
@@ -331,6 +375,7 @@ def test_live_shared_pii_rules_apply_only_after_config_resolution(
                         alias: {
                             "engine": live.engine,
                             "access_level": "all_pii_safe",
+                            "require_tls": False,
                             "connection_url": url(live.sql_config, "secure"),
                             "pii_key_env": key_name,
                             "pii": {
@@ -413,5 +458,111 @@ def test_live_shared_pii_rules_apply_only_after_config_resolution(
             )
             assert denied.is_error is True
             assert "ACCESS_LEVEL_DENIED" in _text(denied)
+
+    asyncio.run(scenario())
+
+
+def test_live_deny_by_default_and_deny_list_on_three_engines(
+    live_database: LiveDatabase,
+    live_mysql_only: LiveMySql,
+    live_mariadb_only: LiveMySql,
+    tmp_path: Path,
+) -> None:
+    """Unlisted columns come back as tokens and denied columns are rejected on every engine."""
+
+    def url(config: AppConfig, alias: str) -> str:
+        return config.servers[alias].connection_url.get_secret_value()
+
+    engines = (
+        ("mssql", "sqlserver", live_database.config, "secure", "MATRIX_MSSQL_KEY"),
+        ("mysql", live_mysql_only.engine, live_mysql_only.sql_config, "secure", "MATRIX_MYSQL_KEY"),
+        (
+            "maria",
+            live_mariadb_only.engine,
+            live_mariadb_only.sql_config,
+            "secure",
+            "MATRIX_MARIA_KEY",
+        ),
+    )
+    tables = {"mssql": "Users", "mysql": "people", "maria": "people"}
+    id_columns = {"mssql": "Id", "mysql": "id", "maria": "id"}
+    email_columns = {"mssql": "Email", "mysql": "email", "maria": "email"}
+    servers: dict[str, Any] = {}
+    for alias, engine, source, source_alias, key_name in engines:
+        base = {
+            "engine": engine,
+            "access_level": "all_pii_safe",
+            "require_tls": False,
+            "connection_url": url(source, source_alias),
+            "pii_key_env": key_name,
+        }
+        servers[alias] = {
+            **base,
+            "pii": {
+                "mode": "deny-by-default",
+                "exposed_columns": [{"table": tables[alias], "columns": [id_columns[alias]]}],
+            },
+        }
+        servers[f"{alias}_deny"] = {
+            **base,
+            "pii_key_env": f"{key_name}_DENY",
+            "pii": {
+                "mode": "deny-by-default",
+                "deny": [{"table": tables[alias], "columns": [email_columns[alias]]}],
+            },
+        }
+    path = tmp_path / "deny-by-default.yaml"
+    path.write_text(yaml.safe_dump({"version": 1, "servers": servers}), encoding="utf-8")
+    keys = {
+        "MATRIX_MSSQL_KEY": live_database.pii_key,
+        "MATRIX_MYSQL_KEY": live_mysql_only.key,
+        "MATRIX_MARIA_KEY": live_mariadb_only.key,
+    }
+    # Keys must be unique per alias, so each *_deny alias gets a key derived from its sibling's.
+    keys |= {f"{name}_DENY": hashlib.sha256(key).digest() for name, key in keys.items()}
+    config = load_config(path, {name: base64.b64encode(key).decode() for name, key in keys.items()})
+    databases = {
+        "mssql": live_database.database,
+        "mysql": live_mysql_only.sql_database,
+        "maria": live_mariadb_only.sql_database,
+    }
+    from_clauses = {
+        "mssql": f"[{live_database.alpha_schema}].[Users]",
+        "mysql": "people",
+        "maria": "people",
+    }
+
+    async def scenario() -> None:
+        async with Client(create_server(config), raise_exceptions=True) as client:
+            for alias in ("mssql", "mysql", "maria"):
+                source = from_clauses[alias]
+                ok = await client.call_tool(
+                    "execute_sql",
+                    {
+                        "server": alias,
+                        "database": databases[alias],
+                        "sql": (
+                            f"SELECT {id_columns[alias]}, {email_columns[alias]} "
+                            f"FROM {source} ORDER BY {id_columns[alias]}"
+                        ),
+                    },
+                )
+                assert ok.is_error is False, _text(ok)
+                content = ok.structured_content
+                assert [column["encoding"] for column in content["columns"]] == ["json", "token"]
+                cells = [row[1] for row in content["rows"] if row[1] is not None]  # NULL stays null
+                assert cells
+                assert all(cell.startswith("pii:v1:") for cell in cells)
+
+                denied = await client.call_tool(
+                    "execute_sql",
+                    {
+                        "server": f"{alias}_deny",
+                        "database": databases[alias],
+                        "sql": f"SELECT {email_columns[alias]} FROM {source}",
+                    },
+                )
+                assert denied.is_error is True
+                assert "a denied column cannot be referenced" in _text(denied)
 
     asyncio.run(scenario())

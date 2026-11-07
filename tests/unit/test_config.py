@@ -79,7 +79,7 @@ servers:
     config = load_config(
         path,
         {
-            "URL": "mssql+pyodbc://user:password@sql01/master?driver=ODBC+Driver+18+for+SQL+Server",
+            "URL": "mssql+pyodbc://user:password@sql01/master?driver=x&Encrypt=yes",
             "LEGACY_KEY": _key(1),
         },
     )
@@ -114,9 +114,9 @@ servers:
 """,
         ),
         {
-            "TABLES_URL": "mssql+pyodbc://u:p@tables/master?driver=x",
-            "ROUTINES_URL": "mssql+pyodbc://u:p@routines/master?driver=x",
-            "QUERY_URL": "mssql+pyodbc://u:p@query/master?driver=x",
+            "TABLES_URL": "mssql+pyodbc://u:p@tables/master?driver=x&Encrypt=yes",
+            "ROUTINES_URL": "mssql+pyodbc://u:p@routines/master?driver=x&Encrypt=yes",
+            "QUERY_URL": "mssql+pyodbc://u:p@query/master?driver=x&Encrypt=yes",
             "QUERY_KEY": _key(1),
         },
     )
@@ -142,7 +142,7 @@ servers:
     )
 
     with pytest.raises(DomainError, match="CONFIG_ERROR"):
-        load_config(path, {"URL": "mssql+pyodbc://u:p@legacy/master?driver=x"})
+        load_config(path, {"URL": "mssql+pyodbc://u:p@legacy/master?driver=x&Encrypt=yes"})
 
 
 def test_resolves_default_named_and_local_pii_rules_in_stable_order(tmp_path: Path) -> None:
@@ -186,8 +186,8 @@ servers:
     config = load_config(
         path,
         {
-            "DEFAULT_URL": "mssql+pyodbc://u:p@default/master?driver=x",
-            "NAMED_URL": "mssql+pyodbc://u:p@named/master?driver=x",
+            "DEFAULT_URL": "mssql+pyodbc://u:p@default/master?driver=x&Encrypt=yes",
+            "NAMED_URL": "mssql+pyodbc://u:p@named/master?driver=x&Encrypt=yes",
             "DEFAULT_KEY": _key(4),
             "NAMED_KEY": _key(5),
         },
@@ -260,7 +260,7 @@ servers:
     with pytest.raises(DomainError, match=message):
         load_config(
             path,
-            {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(6)},
+            {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(6)},
         )
 
 
@@ -282,7 +282,9 @@ servers:
     )
 
     with pytest.raises(DomainError) as raised:
-        load_config(path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(6)})
+        load_config(
+            path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(6)}
+        )
 
     assert raised.value.public_message == (
         "Invalid configuration: at most one unnamed pii rule set is allowed"
@@ -310,7 +312,7 @@ servers:
 
     config = load_config(
         path,
-        {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(7)},
+        {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(7)},
     )
 
     app_pii = config.servers["app"].pii
@@ -340,7 +342,7 @@ servers:
 
     config = load_config(
         path,
-        {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(7)},
+        {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(7)},
     )
 
     pii = config.servers["app"].pii
@@ -361,7 +363,7 @@ servers:
   app:
     engine: {engine}
     access_level: all_pii_safe
-    connection_url: mysql+pymysql://u:p@app/database
+    connection_url: mysql+pymysql://u:p@app/database?ssl_ca=/ca.pem
     pii_key_env: KEY
     pii: {pii}
     """
@@ -405,7 +407,11 @@ servers:
             "{include: [shared, shared]}",
             "more than once",
         ),
-        ("", "{include: []}", "all_pii_safe servers require pii_key_env and pii rules"),
+        (
+            "",
+            "{include: []}",
+            "all_pii_safe servers require pii_key_env or pii_key_file, and pii rules",
+        ),
     ],
 )
 def test_shared_rule_resolution_rejects_ambiguous_or_empty_effective_rules(
@@ -430,7 +436,9 @@ servers:
     )
 
     with pytest.raises(DomainError, match=message):
-        load_config(path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x", "KEY": _key(9)})
+        load_config(
+            path, {"URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes", "KEY": _key(9)}
+        )
 
 
 def test_default_rules_skip_metadata_and_resolution_continues_to_later_aliases(
@@ -457,8 +465,8 @@ servers:
     config = load_config(
         path,
         {
-            "META_URL": "mssql+pyodbc://u:p@meta/master?driver=x",
-            "APP_URL": "mssql+pyodbc://u:p@app/master?driver=x",
+            "META_URL": "mssql+pyodbc://u:p@meta/master?driver=x&Encrypt=yes",
+            "APP_URL": "mssql+pyodbc://u:p@app/master?driver=x&Encrypt=yes",
             "KEY": _key(10),
         },
     )
@@ -488,10 +496,11 @@ servers:
     )
 
     with pytest.raises(DomainError) as raised:
-        load_config(path, {"URL": "mssql+pyodbc://u:p@meta/master?driver=x"})
+        load_config(path, {"URL": "mssql+pyodbc://u:p@meta/master?driver=x&Encrypt=yes"})
 
     assert raised.value.public_message == (
-        "Invalid configuration: metadata servers cannot configure pii_key_env or pii rules"
+        "Invalid configuration: metadata servers cannot configure "
+        "pii_key_env, pii_key_file or pii rules"
     )
 
 
@@ -512,10 +521,11 @@ servers:
     )
 
     with pytest.raises(DomainError) as raised:
-        load_config(path, {"URL": "mssql+pyodbc://u:p@routines/master?driver=x"})
+        load_config(path, {"URL": "mssql+pyodbc://u:p@routines/master?driver=x&Encrypt=yes"})
 
     assert raised.value.public_message == (
-        "Invalid configuration: meta_and_code servers cannot configure pii_key_env or pii rules"
+        "Invalid configuration: meta_and_code servers cannot configure "
+        "pii_key_env, pii_key_file or pii rules"
     )
 
 
@@ -540,8 +550,8 @@ servers:
 """,
     )
     env = {
-        "URL_ONE": "mssql+pyodbc://u:p@one/master?driver=x",
-        "URL_TWO": "mssql+pyodbc://u:p@two/master?driver=x",
+        "URL_ONE": "mssql+pyodbc://u:p@one/master?driver=x&Encrypt=yes",
+        "URL_TWO": "mssql+pyodbc://u:p@two/master?driver=x&Encrypt=yes",
         "KEY_ONE": _key(2),
         "KEY_TWO": _key(2),
     }
@@ -566,7 +576,7 @@ servers:
 """,
     )
     env = {
-        "URL": "mssql+pyodbc://u:p@one/master?driver=x",
+        "URL": "mssql+pyodbc://u:p@one/master?driver=x&Encrypt=yes",
         "KEY": base64.b64encode(b"x" * length).decode(),
     }
 
@@ -627,7 +637,7 @@ servers:
   one:
     engine: {engine}
     access_level: all_pii_safe
-    connection_url: mysql+pymysql://user:password@localhost/database
+    connection_url: mysql+pymysql://user:password@localhost/database?ssl_ca=/ca.pem
     pii_key_env: KEY
     pii:
       rules:
@@ -656,7 +666,7 @@ servers:
     engine: sqlserver
     connection_url: ${URL}
 """,
-            {"URL": "mssql+pyodbc://u:p@host/master?driver=x"},
+            {"URL": "mssql+pyodbc://u:p@host/master?driver=x&Encrypt=yes"},
         ),
         (
             """
@@ -703,7 +713,9 @@ servers:
     )
 
     with pytest.raises(DomainError, match="valid base64"):
-        load_config(path, {"URL": "mssql+pyodbc://u:p@host/master?driver=x", "KEY": "!!!"})
+        load_config(
+            path, {"URL": "mssql+pyodbc://u:p@host/master?driver=x&Encrypt=yes", "KEY": "!!!"}
+        )
 
 
 @pytest.mark.parametrize(
@@ -731,7 +743,7 @@ servers:
     with pytest.raises(DomainError, match="CONFIG_ERROR"):
         load_config(
             path,
-            {"URL": "mssql+pyodbc://u:p@host/master?driver=x", "KEY": _key(3)},
+            {"URL": "mssql+pyodbc://u:p@host/master?driver=x&Encrypt=yes", "KEY": _key(3)},
         )
 
 
@@ -789,6 +801,16 @@ def test_logging_level_accepts_standard_levels(tmp_path: Path, level: str) -> No
     assert load_config(path, {}).logging.level == level
 
 
+def test_logging_audit_is_off_by_default_and_opt_in(tmp_path: Path) -> None:
+    default = load_config(_write(tmp_path, "version: 1\n" + _MINIMAL_SERVER), {})
+    enabled = load_config(
+        _write(tmp_path, "version: 1\nlogging:\n  audit: true\n" + _MINIMAL_SERVER), {}
+    )
+
+    assert default.logging.audit is False
+    assert enabled.logging.audit is True
+
+
 @pytest.mark.parametrize("body", ["  level: debug\n", "  level: TRACE\n", "  file: x.log\n"])
 def test_logging_rejects_unknown_levels_and_keys(tmp_path: Path, body: str) -> None:
     path = _write(tmp_path, "version: 1\nlogging:\n" + body + _MINIMAL_SERVER)
@@ -842,8 +864,199 @@ servers:
     engine: sqlserver
     connection_url: ${DEV_URL}
 """
-    env = {"DEV_URL": "mssql+pyodbc://sa:p@10.12.11.107:1433/master?driver=x"}
+    env = {"DEV_URL": "mssql+pyodbc://sa:p@10.12.11.107:1433/master?driver=x&Encrypt=yes"}
 
     config = load_config(_write(tmp_path, text), env)
 
     assert make_url(config.servers["dev"].connection_url.get_secret_value()).port == 1433
+
+
+_DENY_ENV = {"URL": "mssql+pyodbc://u:p@peds/master?driver=x&Encrypt=yes", "KEY": _key(7)}
+
+
+def _peds_config(pii: str, shared: str = "") -> str:
+    return f"""
+version: 1
+{shared}
+servers:
+  peds:
+    engine: sqlserver
+    access_level: all_pii_safe
+    connection_url: ${{URL}}
+    pii_key_env: KEY
+    pii:
+{pii}
+"""
+
+
+def test_pii_mode_defaults_to_protect(tmp_path: Path) -> None:
+    text = _peds_config('      rules: [{database: "*", table: Users, columns: [Email]}]')
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert (pii.mode, pii.exposed_columns, pii.deny) == ("protect", [], [])
+
+
+def test_deny_by_default_alias_loads_without_database_on_exposed_and_deny(tmp_path: Path) -> None:
+    text = _peds_config(
+        """      mode: deny-by-default
+      exposed_columns:
+        - {table: Visits, columns: [VisitId, DepartmentCode]}
+      deny:
+        - {table: "*", columns: [Notes, Anamnesis]}
+        - {table: Attachments, columns: ["*"]}"""
+    )
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert pii.mode == "deny-by-default"
+    assert pii.rules == []
+    assert [rule.database for rule in pii.exposed_columns + pii.deny] == ["*", "*", "*"]
+    assert pii.deny[1].columns == ["*"]
+
+
+@pytest.mark.parametrize(
+    "pii",
+    [
+        '      rules: [{table: Users, columns: ["*"]}]',
+        '      mode: deny-by-default\n      exposed_columns: [{table: Users, columns: ["*"]}]',
+        "      mode: allow-all",
+        "      exposed_columns: []",
+    ],
+)
+def test_invalid_deny_shapes_are_config_errors(tmp_path: Path, pii: str) -> None:
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, _peds_config(pii)), _DENY_ENV)
+
+
+@pytest.mark.parametrize("section", ["exposed_columns", "deny"])
+def test_mysql_exposed_and_deny_rules_cannot_set_schema(tmp_path: Path, section: str) -> None:
+    text = f"""
+version: 1
+servers:
+  m:
+    engine: mysql
+    access_level: all_pii_safe
+    connection_url: ${{URL}}
+    pii_key_env: KEY
+    pii:
+      mode: deny-by-default
+      {section}: [{{schema: dbo, table: people, columns: [email]}}]
+"""
+    env = {**_DENY_ENV, "URL": "mysql+pymysql://u:p@h/db?ssl_ca=/ca.pem"}
+    with pytest.raises(DomainError, match="cannot set schema"):
+        load_config(_write(tmp_path, text), env)
+
+
+def test_deny_by_default_is_only_for_all_pii_safe_servers(tmp_path: Path) -> None:
+    text = """
+version: 1
+servers:
+  meta:
+    engine: sqlserver
+    connection_url: ${URL}
+    pii:
+      mode: deny-by-default
+"""
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, text), _DENY_ENV)
+
+
+def test_shared_rule_sets_carry_the_token_domain(tmp_path: Path) -> None:
+    shared = """pii_rules:
+  - name: people
+    rules:
+      - {database: "*", table: Patients, columns: [Email], domain: contact}
+      - {database: "*", table: Patients, columns: [Dob]}"""
+    text = _peds_config("      include: [people]", shared)
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert [rule.domain for rule in pii.rules] == ["contact", None]
+
+
+@pytest.mark.parametrize("domain", ["", "-x", "has space", "a/b", "é"])
+def test_token_domain_must_look_like_an_alias(tmp_path: Path, domain: str) -> None:
+    rule = f'{{database: "*", table: Patients, columns: [Email], domain: "{domain}"}}'
+    pii = f"      rules: [{rule}]"
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, _peds_config(pii, "")), _DENY_ENV)
+
+
+@pytest.mark.parametrize("section", ["exposed_columns", "deny"])
+def test_token_domain_is_only_for_protection_rules(tmp_path: Path, section: str) -> None:
+    pii = (
+        "      mode: deny-by-default\n"
+        f'      {section}: [{{table: Patients, columns: [Email], domain: "contact"}}]'
+    )
+    with pytest.raises(DomainError, match="CONFIG_ERROR"):
+        load_config(_write(tmp_path, _peds_config(pii, "")), _DENY_ENV)
+
+
+def test_shared_rule_sets_carry_deny_and_exposed_columns(tmp_path: Path) -> None:
+    shared = """pii_rules:
+  - deny: [{table: "*", columns: [Notes]}]
+  - name: visits
+    exposed_columns: [{table: Visits, columns: [VisitId]}]
+    deny: [{table: Attachments, columns: ["*"]}]"""
+    text = _peds_config(
+        """      mode: deny-by-default
+      include: [visits]
+      deny: [{table: Secrets, columns: ["*"]}]""",
+        shared,
+    )
+
+    pii = load_config(_write(tmp_path, text), _DENY_ENV).servers["peds"].pii
+
+    assert pii is not None
+    assert pii.mode == "deny-by-default"
+    assert [rule.table for rule in pii.deny] == ["*", "Attachments", "Secrets"]
+    assert [rule.table for rule in pii.exposed_columns] == ["Visits"]
+
+
+def _ttl_config(runtime: str = "") -> str:
+    return (
+        f"version: 1\n{runtime}servers:\n"
+        "  one:\n"
+        "    engine: sqlserver\n"
+        "    access_level: all_pii_safe\n"
+        "    connection_url: mssql+pyodbc://u:p@one/master?driver=x&Encrypt=yes\n"
+        "    pii_key_env: KEY_ONE\n"
+        '    pii: {rules: [{database: "*", schema: dbo, table: Users, columns: [Email]}]}\n'
+    )
+
+
+def test_token_ttl_is_off_by_default_and_bounded(tmp_path: Path) -> None:
+    env = {"KEY_ONE": _key(1)}
+    default = load_config(_write(tmp_path, _ttl_config()), env)
+    set_ttl = load_config(
+        _write(tmp_path, _ttl_config("runtime: {token_ttl_seconds: 86400}\n")), env
+    )
+
+    assert default.runtime.token_ttl_seconds is None
+    assert set_ttl.runtime.token_ttl_seconds == 86400
+    for bad in (0, -1, 315_360_001, "true"):
+        text = _ttl_config(f"runtime: {{token_ttl_seconds: {bad}}}\n")
+        with pytest.raises(DomainError) as raised:
+            load_config(_write(tmp_path, text), env)
+        assert "token_ttl_seconds" in raised.value.public_message
+
+
+def test_min_count_cell_is_off_by_default_and_bounded(tmp_path: Path) -> None:
+    env = {"KEY_ONE": _key(1)}
+    default = load_config(_write(tmp_path, _ttl_config()), env)
+    edges = [
+        load_config(_write(tmp_path, _ttl_config(f"runtime: {{min_count_cell: {k}}}\n")), env)
+        for k in (0, 1000)
+    ]
+
+    assert default.runtime.min_count_cell == 0
+    assert [config.runtime.min_count_cell for config in edges] == [0, 1000]
+    for bad in (-1, 1001, "true", 2.5):
+        text = _ttl_config(f"runtime: {{min_count_cell: {bad}}}\n")
+        with pytest.raises(DomainError) as raised:
+            load_config(_write(tmp_path, text), env)
+        assert "min_count_cell" in raised.value.public_message

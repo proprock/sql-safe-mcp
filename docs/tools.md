@@ -60,9 +60,22 @@ reference and is rejected, and `TIME` results beyond 24 hours are not supported.
 - A protected column may be projected (with or without an alias) and compared with `=` or `IN`
   against tokens issued for the same server alias. Plaintext comparison, `ORDER BY`, join keys,
   functions, and arithmetic on protected columns are rejected.
+- A server with `pii.mode: deny-by-default` treats every column not listed in
+  `pii.exposed_columns` as protected, so `SELECT *` returns tokens for those columns. A column in
+  `pii.deny` cannot be referenced anywhere; the query is rejected with `QUERY_REJECTED` and the
+  reason "a denied column cannot be referenced".
 - Protected cells are returned as `pii:v1:...` tokens; `NULL` stays `null`. A malformed, tampered,
   wrong-key, or other-alias token fails with the single error `INVALID_PII_TOKEN`.
+- A token is accepted only for a protected column of the same value type: string, integer,
+  float, decimal, boolean, date, time, datetime, uuid, or binary. The type is taken from the
+  reflected column; a column of any other type accepts no token. A mismatch is rejected before
+  the database sees the query, with `QUERY_REJECTED` and the reason "a PII token does not match
+  the type of the protected column".
 - Each result column reports `name`, `source` (`schema`, `table`, `column`, or `null`),
   `protected`, and `encoding` (`json`, `token`, `decimal`, `date`, `time`, `datetime`, `uuid`,
-  `base64`).
+  `base64`, `suppressed`).
+- With `runtime.min_count_cell` set to `k`, a `COUNT(*)` value from 1 to `k - 1` is returned as
+  `null` and its column's encoding is `suppressed`; other values in that column stay JSON
+  integers. `0` is returned as is: an empty result names no one. The threshold does not stop
+  differencing, such as subtracting the counts of two overlapping filters.
 - Token values are sent to the database only as bind parameters, never inside the SQL text.

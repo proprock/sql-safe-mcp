@@ -38,8 +38,10 @@ from sql_safe_mcp.security.executor import execute_validated
 from sql_safe_mcp.security.pipeline import validate_sql
 from sql_safe_mcp.security.schema import ReflectedCatalog, SchemaCache, TableCatalog
 from sql_safe_mcp.security.tokens import TokenKeyRegistry
+from sql_safe_mcp.security.validated_query import ValidatedQuery
 
 logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger("sql_safe_mcp.audit")
 CatalogFactory = Callable[[Connection, str, str], TableCatalog]
 _SCHEMA_CACHE_ENTRIES = 1024
 _SCHEMA_CACHE_TTL_SECONDS = 300.0
@@ -120,6 +122,29 @@ def _qualified_name(schema: str | None, name: str) -> str:
     return name if schema is None else f"{schema}.{name}"
 
 
+def _audit_name(value: str) -> str:
+    """Keep a caller- or metadata-supplied name on one field of the audit line."""
+    return re.sub(r"[^\w.$#@-]", "?", value)
+
+
+def _audit_objects(query: ValidatedQuery | None) -> str:
+    if query is None:
+        return "tables=- columns=- protected=-"
+    tables = {f"{schema}.{table}" for schema, table in query.tables}
+    columns = {f"{ref.schema}.{ref.table}.{ref.column}" for ref in query.references}
+    columns.update(
+        f"{plan.source.schema}.{plan.source.table}.{plan.source.column}"
+        for plan in query.outputs
+        if plan.source is not None
+    )
+    tables.update(column.rsplit(".", 1)[0] for column in columns)
+    protected = sum(plan.protected for plan in query.outputs)
+    return (
+        f"tables={','.join(sorted(map(_audit_name, tables))) or '-'} "
+        f"columns={','.join(sorted(map(_audit_name, columns))) or '-'} protected={protected}"
+    )
+
+
 class DatabaseService:
     def __init__(
         self,
@@ -172,7 +197,8 @@ class DatabaseService:
             operation,
             error.code,
             error.correlation_id or "-",
-            describe_error(cause, secrets),
+            # execute_sql drivers echo caller-influenced values and PII, so no message text.
+            describe_error(cause, secrets, include_message=operation != "execute_sql"),
         )
         return error
 
@@ -390,10 +416,12 @@ class DatabaseService:
         codec = self._tokens.codec_for(server)
         pii = configured.pii
         dialect = dialect_for(configured.engine)
+        issued: ValidatedQuery | None = None
 
         def operation(engine: Engine) -> SqlResult:
+            nonlocal issued
             with engine.connect() as connection:
-                validated = validate_sql(
+                validated = issued = validate_sql(
                     sql,
                     alias=server,
                     database=database,
@@ -426,4 +454,40 @@ class DatabaseService:
                 truncated=executed.truncated,
             )
 
-        return await self._run(server, database, "execute_sql", operation)
+        started = time.perf_counter()
+        try:
+            result = await self._run(server, database, "execute_sql", operation)
+        except DomainError as exc:
+            if self.config.logging.audit:
+                self._audit(server, database, issued, started, code=exc.code, reference=exc)
+            raise
+        if self.config.logging.audit:
+            self._audit(server, database, issued, started, result=result)
+        return result
+
+    @staticmethod
+    def _audit(
+        alias: str,
+        database: str,
+        query: ValidatedQuery | None,
+        started: float,
+        *,
+        result: SqlResult | None = None,
+        code: ErrorCode | None = None,
+        reference: DomainError | None = None,
+    ) -> None:
+        # Names and counts only: never SQL text, bind values, result rows, or tokens.
+        outcome = (
+            f"code={code}"
+            if result is None
+            else f"row_count={result.row_count} truncated={result.truncated}"
+        )
+        audit_logger.info(
+            "audit server=%s database=%s %s %s elapsed_ms=%d reference=%s",
+            _audit_name(alias),
+            _audit_name(database),
+            _audit_objects(query),
+            outcome,
+            (time.perf_counter() - started) * 1000,
+            (reference.correlation_id if reference else None) or uuid4().hex,
+        )

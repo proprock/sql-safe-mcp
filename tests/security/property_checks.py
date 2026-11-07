@@ -10,7 +10,7 @@ import contextlib
 import json
 from typing import Any
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 from support import (
     ALIAS,
     DATABASE,
@@ -30,7 +30,13 @@ from support import (
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.models import SqlResult
 from sql_safe_mcp.security.executor import execute_validated
-from sql_safe_mcp.security.parser import ParserLimits, parse_select, validate_allowlist
+from sql_safe_mcp.security.parser import (
+    _ALLOWED_ARGS,
+    _ALLOWED_PARENTS,
+    ParserLimits,
+    parse_select,
+    validate_allowlist,
+)
 from sql_safe_mcp.security.tokens import PREFIX, TokenCodec
 
 SPY = SpyConnection()
@@ -73,6 +79,44 @@ def check_generated_sql_reparses_and_validates(spec: Spec, seed: int) -> None:
     assert PREFIX not in query.sql
 
 
+def with_tokens(sql: str, parameters: tuple[Any, ...], marker: str) -> str:
+    """Put a fresh token for each bind value back where its marker stands."""
+    pieces = sql.split(marker)
+    assert len(pieces) == len(parameters) + 1
+    out = [pieces[0]]
+    for value, piece in zip(parameters, pieces[1:], strict=True):
+        out += [f"'{OWN.encrypt(value)}'", piece]
+    return "".join(out)
+
+
+def check_generated_sql_is_a_fixpoint(spec: Spec, seed: int) -> None:
+    """Validating the server's own output, tokens restored, reproduces it exactly."""
+    first = validate(render(spec, seed))
+    second = validate(with_tokens(first.sql, first.parameters, "?"))
+    assert (second.sql, second.parameters) == (first.sql, first.parameters)
+
+
+QUOTING_ALPHABET = "]\"`\n%;-/*[\x00‮​'ab"
+
+
+def bracket(name: str) -> str:
+    return "[" + name.replace("]", "]]") + "]"
+
+
+def check_quoted_aliases_round_trip(column_alias: str, table_alias: str) -> None:
+    """A hostile alias is rejected, or the generated SQL parses back to the validated AST."""
+    sql = (
+        f"SELECT {bracket(table_alias)}.Id AS {bracket(column_alias)} "
+        f"FROM Users AS {bracket(table_alias)}"
+    )
+    try:
+        query = validate(sql)
+    except DomainError as error:
+        assert error.code is ErrorCode.QUERY_REJECTED
+        return
+    assert parse_one(query.sql, dialect="tsql") == query.ast
+
+
 def check_every_forbidden_mutation_changes_the_query(spec: Spec, seed: int) -> None:
     """Guards the guard: a mutation that silently does nothing would inflate the coverage."""
     sql = render(spec, seed)
@@ -94,6 +138,86 @@ def check_forbidden_constructs_are_rejected_and_never_executed(
     else:
         raise AssertionError(f"accepted forbidden construct: {mutated!r}")
     assert len(SPY.calls) == before
+
+
+_SLOTS = (
+    "this",
+    "expression",
+    "expressions",
+    "alias",
+    "table",
+    "db",
+    "on",
+    "where",
+    "from_",
+    "joins",
+    "order",
+    "limit",
+)
+_LIST_SLOTS = frozenset({"expressions", "joins"})
+
+
+def _placements(parent: exp.Expr) -> list[exp.Select]:
+    """Minimal SELECTs holding `parent` in every clause that could legally host it."""
+    table = exp.to_table("t")
+    wrappers = {
+        "raw expressions": lambda q: q.set("expressions", [parent.copy()]),
+        "raw where": lambda q: q.set("where", parent.copy()),
+        "raw from": lambda q: q.set("from_", parent.copy()),
+        "raw joins": lambda q: q.set("joins", [parent.copy()]),
+        "raw order": lambda q: q.set("order", parent.copy()),
+        "raw limit": lambda q: q.set("limit", parent.copy()),
+        "where": lambda q: q.set("where", exp.Where(this=parent.copy())),
+        "from": lambda q: q.set("from_", exp.From(this=parent.copy())),
+        "join on": lambda q: q.set("joins", [exp.Join(this=table.copy(), on=parent.copy())]),
+        "join": lambda q: q.set("joins", [exp.Join(this=parent.copy(), on=exp.true())]),
+        "order": lambda q: q.set("order", exp.Order(expressions=[parent.copy()])),
+        "limit": lambda q: q.set("limit", exp.Limit(expression=parent.copy())),
+    }
+    queries = []
+    for place in wrappers.values():
+        query = exp.select("Id").from_("Users")
+        place(query)
+        queries.append(query)
+    return queries
+
+
+def _slot_queries(kind: type[exp.Expr], parent: type[exp.Expr], slot: str) -> list[exp.Select]:
+    holder = instance(parent)
+    holder.set(slot, [instance(kind)] if slot in _LIST_SLOTS else instance(kind))
+    return _placements(holder)
+
+
+def instance(kind: type[exp.Expr]) -> exp.Expr:
+    """An empty node of `kind`; a Literal needs its is_string flag like every parsed one."""
+    return exp.Literal.number(1) if kind is exp.Literal else kind()
+
+
+def allowed_parent_pairs() -> set[tuple[type[exp.Expr], type]]:
+    """(kind, parent) pairs the position allowlist admits, with the root as `exp.Select` itself."""
+    return {
+        (kind, parent)
+        for kind, parents in _ALLOWED_PARENTS.items()
+        for parent in parents
+        if parent is not type(None)
+    }
+
+
+def check_node_position_is_allowlisted(kind: type[exp.Expr], parent: type[exp.Expr]) -> None:
+    """An allowed node type under a parent outside _ALLOWED_PARENTS is rejected, never a crash."""
+    listed = (kind, parent) in allowed_parent_pairs()
+    if parent is exp.Literal:
+        return  # a Literal holds a string, never a child node
+    for slot in _SLOTS:
+        if slot not in _ALLOWED_ARGS[parent]:
+            continue
+        for query in _slot_queries(kind, parent, slot):
+            try:
+                validate_allowlist(query)
+            except DomainError as error:
+                assert error.code is ErrorCode.QUERY_REJECTED, (kind, parent, slot, error)
+            else:
+                assert listed, f"{kind.__name__} accepted in {parent.__name__}.{slot}"
 
 
 def check_only_validated_sql_is_ever_executed(text: str) -> None:

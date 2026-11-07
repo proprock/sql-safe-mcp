@@ -52,6 +52,7 @@ def _pii_server(url: str, schema: str, key: bytes, key_env: str) -> ServerConfig
     return ServerConfig(
         engine="sqlserver",
         access_level="all_pii_safe",
+        require_tls=False,  # the test container uses a self-signed certificate
         connection_url=SecretStr(url),
         pii_key_env=key_env,
         pii=PiiConfig(

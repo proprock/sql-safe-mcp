@@ -20,9 +20,9 @@ from sql_safe_mcp.service import DatabaseService
 ENGINES = {"mssql": "sqlserver", "mysql": "mysql", "maria": "mariadb"}
 KEYS = {alias: bytes([index]) * 32 for index, alias in enumerate(ENGINES, start=1)}
 URLS = {
-    "sqlserver": "mssql+pyodbc://u:p@sql/master?driver=x",
-    "mysql": "mysql+pymysql://u:p@db/app",
-    "mariadb": "mysql+pymysql://u:p@db/app",
+    "sqlserver": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
+    "mysql": "mysql+pymysql://u:p@db/app?ssl_ca=/ca.pem",
+    "mariadb": "mysql+pymysql://u:p@db/app?ssl_ca=/ca.pem",
 }
 QUERY = "SELECT u.Id FROM Users u WHERE u.Email = '{token}'"
 

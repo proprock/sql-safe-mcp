@@ -9,9 +9,12 @@ from typing import Any
 from mcp import Client
 from mcp_types import TextContent
 from pydantic import SecretStr
+from sqlalchemy.exc import DBAPIError
+from typed_columns import typed
 
 from sql_safe_mcp.config import AppConfig, LoggingConfig, ServerConfig
 from sql_safe_mcp.mcp_server import create_server
+from sql_safe_mcp.security.schema import ColumnSchema
 
 
 def _config() -> AppConfig:
@@ -20,7 +23,7 @@ def _config() -> AppConfig:
         servers={
             "legacy": ServerConfig(
                 engine="sqlserver",
-                connection_url=SecretStr("mssql+pyodbc://u:p@sql/master?driver=x"),
+                connection_url=SecretStr("mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes"),
             )
         },
     )
@@ -136,17 +139,17 @@ def _secure_config() -> AppConfig:
             "servers": {
                 "legacy": {
                     "engine": "sqlserver",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                 },
                 "code": {
                     "engine": "sqlserver",
                     "access_level": "meta_and_code",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                 },
                 "secure": {
                     "engine": "sqlserver",
                     "access_level": "all_pii_safe",
-                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
                     "pii_key_env": "K",
                     "pii_key": base64.b64encode(KEY).decode(),
                     "pii": {
@@ -158,6 +161,18 @@ def _secure_config() -> AppConfig:
                                 "columns": ["Email"],
                             }
                         ]
+                    },
+                },
+                "peds": {
+                    "engine": "sqlserver",
+                    "access_level": "all_pii_safe",
+                    "connection_url": "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes",
+                    "pii_key_env": "PK",
+                    "pii_key": base64.b64encode(bytes(range(1, 33))).decode(),
+                    "pii": {
+                        "mode": "deny-by-default",
+                        "exposed_columns": [{"table": "Users", "columns": ["Id"]}],
+                        "deny": [{"table": "Audit", "columns": ["*"]}],
                     },
                 },
             },
@@ -196,10 +211,10 @@ class _Connection:
 
 class _Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
-        return [("dbo", "Users")]
+        return [("dbo", "Users"), ("dbo", "Audit")]
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return ["Id", "Email"]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(["Id", "Email"])
 
 
 def _patch_database(monkeypatch: Any, connection: _Connection) -> None:
@@ -260,6 +275,39 @@ def test_execute_sql_returns_structured_result_with_tokens(monkeypatch: Any) -> 
     asyncio.run(scenario())
 
 
+def test_deny_by_default_alias_tokenizes_every_unlisted_column(monkeypatch: Any) -> None:
+    connection = _Connection()
+    _patch_database(monkeypatch, connection)
+
+    async def scenario() -> None:
+        async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "execute_sql",
+                {"server": "peds", "database": "app", "sql": "SELECT * FROM Users"},
+            )
+            assert result.is_error is False
+            content = result.structured_content
+            assert content is not None
+            assert [(c["name"], c["encoding"]) for c in content["columns"]] == [
+                ("Id", "json"),
+                ("Email", "token"),
+            ]
+            assert content["rows"][0][1].startswith("pii:v1:")
+            assert "a@b.c" not in str(content)
+
+            denied = await client.call_tool(
+                "execute_sql",
+                {"server": "peds", "database": "app", "sql": "SELECT Id FROM Audit"},
+            )
+            assert denied.is_error is True
+            text = denied.content[0]
+            assert isinstance(text, TextContent)
+            assert "a denied column cannot be referenced" in text.text
+
+    asyncio.run(scenario())
+    assert len(connection.calls) == 1
+
+
 def test_execute_sql_denied_for_metadata_and_meta_and_code_aliases(monkeypatch: Any) -> None:
     connection = _Connection()
     _patch_database(monkeypatch, connection)
@@ -299,6 +347,63 @@ def test_execute_sql_rejected_query_is_a_tool_error_without_execution(monkeypatc
     assert connection.calls == []
 
 
+def test_execute_sql_driver_error_values_reach_neither_the_tool_error_nor_the_log(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    canary = "canary.person@example.org"
+
+    class Failing(_Connection):
+        def exec_driver_sql(self, statement: str, parameters: tuple[Any, ...]) -> _Result:
+            raise DBAPIError(statement, parameters, Exception(f"Conversion failed for '{canary}'"))
+
+    _patch_database(monkeypatch, Failing())
+
+    async def scenario() -> None:
+        async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "execute_sql",
+                {"server": "secure", "database": "app", "sql": "SELECT Id FROM Users"},
+            )
+            assert result.is_error is True
+            content = result.content[0]
+            assert isinstance(content, TextContent)
+            assert canary not in content.text
+
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(scenario())
+    assert canary not in caplog.text
+
+
+def test_execute_sql_audit_line_reaches_the_log_without_changing_the_response(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    _patch_database(monkeypatch, _Connection())
+    config = _secure_config().model_copy(
+        update={"logging": LoggingConfig(level="ERROR", audit=True)}
+    )
+    content: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        async with Client(create_server(config), raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "execute_sql",
+                {"server": "secure", "database": "app", "sql": "SELECT Id, Email FROM Users"},
+            )
+            assert result.structured_content is not None
+            content.update(result.structured_content)
+
+    with caplog.at_level(logging.INFO, logger="sql_safe_mcp.audit"):
+        asyncio.run(scenario())
+    (line,) = [r.getMessage() for r in caplog.records if r.name == "sql_safe_mcp.audit"]
+    assert line.startswith(
+        "audit server=secure database=app tables=dbo.Users "
+        "columns=dbo.Users.Email,dbo.Users.Id protected=1 row_count=1 truncated=False "
+    )
+    assert "a@b.c" not in caplog.text
+    assert set(content) == {"columns", "rows", "row_count", "truncated"}
+    logging.getLogger("sql_safe_mcp.audit").setLevel(logging.NOTSET)
+
+
 def test_execute_sql_output_schema_is_typed(monkeypatch: Any) -> None:
     async def scenario() -> None:
         async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
@@ -312,6 +417,17 @@ def test_execute_sql_output_schema_is_typed(monkeypatch: Any) -> None:
                 "row_count",
                 "truncated",
             }
+
+    asyncio.run(scenario())
+
+
+def test_execute_sql_output_schema_lists_the_suppressed_encoding() -> None:
+    async def scenario() -> None:
+        async with Client(create_server(_secure_config()), raise_exceptions=True) as client:
+            tool = next(t for t in (await client.list_tools()).tools if t.name == "execute_sql")
+            assert tool.output_schema is not None
+            encoding = tool.output_schema["$defs"]["SqlColumn"]["properties"]["encoding"]
+            assert "suppressed" in encoding["enum"]
 
     asyncio.run(scenario())
 

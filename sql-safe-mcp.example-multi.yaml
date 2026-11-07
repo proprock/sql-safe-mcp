@@ -19,11 +19,14 @@ servers:
   billing:
     # `sqlserver` uses an mssql+pyodbc URL; the URL dialect must match this engine.
     engine: sqlserver
-    # all_pii_safe requires both `pii_key_env` and at least one effective local PII rule.
+    # all_pii_safe requires a key (`pii_key_env` or `pii_key_file`) and at least one effective PII rule.
     access_level: all_pii_safe
+    # all_pii_safe requires verified TLS: the URL must set Encrypt=yes and must not set
+    # TrustServerCertificate=yes. `require_tls: false` turns the check off for a dev server.
     connection_url: "${BILLING_SQL_URL}"
     # Environment-variable name for one base64-encoded 32-byte key. Names must match
-    # ^[A-Z_][A-Z0-9_]*$; each all_pii_safe alias needs a different key.
+    # ^[A-Z_][A-Z0-9_]*$; each all_pii_safe alias needs a different key. Instead of
+    # pii_key_env you may set `pii_key_file: secrets/billing.key` (relative to this file).
     pii_key_env: BILLING_PII_KEY
     pii:
       # Only local rules are used in this file; `include` is intentionally absent.
@@ -42,6 +45,7 @@ servers:
     # mysql and mariadb both use mysql+pymysql URLs. Select the engine matching the server.
     engine: mysql
     access_level: all_pii_safe
+    # Verified TLS for MySQL/MariaDB: the URL must set ssl_ca (or ssl_capath).
     connection_url: "${SHOP_MYSQL_URL}"
     pii_key_env: SHOP_PII_KEY
     pii:

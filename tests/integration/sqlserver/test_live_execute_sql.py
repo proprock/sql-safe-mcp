@@ -291,3 +291,16 @@ def test_live_concurrent_executions_are_isolated(live_database: LiveDatabase) ->
     results = asyncio.run(scenario())
     assert all(result.is_error is False for result in results)
     assert {result.structured_content["row_count"] for result in results} == {3}
+
+
+def test_live_token_of_another_type_is_rejected_before_the_database(
+    live_database: LiveDatabase, caplog: pytest.LogCaptureFixture
+) -> None:
+    live = live_database
+    users = table(live, "Users")
+    wrong = codec(live).encrypt(424242)
+    before = canary_state(live)
+    rejected(live, f"SELECT Id FROM {users} WHERE Email = '{wrong}'")
+    rejected(live, f"SELECT Id FROM {users} WHERE Email IN ('{wrong}')")
+    assert "424242" not in caplog.text
+    assert canary_state(live) == before

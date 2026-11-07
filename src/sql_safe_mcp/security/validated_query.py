@@ -30,6 +30,7 @@ class OutputPlan:
     kind: Literal["column", "count", "literal"]
     source: SourceColumn | None
     protected: bool
+    domain: str | None = None
 
 
 class ValidatedQuery:
@@ -42,7 +43,18 @@ class ValidatedQuery:
     constructor, and the object cannot be copied or serialized. `repr` never shows SQL or binds.
     """
 
-    __slots__ = ("_alias", "_ast", "_database", "_max_rows", "_outputs", "_parameters", "_sql")
+    __slots__ = (
+        "_alias",
+        "_ast",
+        "_database",
+        "_max_rows",
+        "_min_count_cell",
+        "_outputs",
+        "_parameters",
+        "_references",
+        "_sql",
+        "_tables",
+    )
 
     def __init__(
         self,
@@ -55,6 +67,9 @@ class ValidatedQuery:
         parameters: tuple[Any, ...],
         outputs: tuple[OutputPlan, ...],
         max_rows: int,
+        min_count_cell: int,
+        references: tuple[SourceColumn, ...] = (),
+        tables: tuple[tuple[str, str], ...] = (),
     ) -> None:
         if seal is not _SEAL:
             raise TypeError("ValidatedQuery can only be issued by the validation pipeline")
@@ -64,7 +79,10 @@ class ValidatedQuery:
         object.__setattr__(self, "_sql", sql)
         object.__setattr__(self, "_parameters", tuple(parameters))
         object.__setattr__(self, "_outputs", outputs)
+        object.__setattr__(self, "_references", references)
+        object.__setattr__(self, "_tables", tables)
         object.__setattr__(self, "_max_rows", max_rows)
+        object.__setattr__(self, "_min_count_cell", min_count_cell)
 
     def __setattr__(self, name: str, value: object) -> NoReturn:
         raise AttributeError("ValidatedQuery is read-only")
@@ -109,8 +127,23 @@ class ValidatedQuery:
         return self._outputs
 
     @property
+    def references(self) -> tuple[SourceColumn, ...]:
+        """Every source column the query reads, including those in conditions and joins."""
+        return self._references
+
+    @property
+    def tables(self) -> tuple[tuple[str, str], ...]:
+        """Reflected `(schema, table)` names the query reads."""
+        return self._tables
+
+    @property
     def max_rows(self) -> int:
         return self._max_rows
+
+    @property
+    def min_count_cell(self) -> int:
+        """`COUNT` values from 1 to this minus one are returned as null; 0 disables."""
+        return self._min_count_cell
 
     @property
     def ast(self) -> exp.Select:
@@ -175,6 +208,7 @@ def issue_validated_query(
     runtime: RuntimeConfig,
     limits: ParserLimits,
     dialect: SqlDialect = SQLSERVER,
+    tables: tuple[tuple[str, str], ...] = (),
 ) -> ValidatedQuery:
     """Rewrite tokens to binds, cap rows, re-validate, and generate SQL from the final AST.
 
@@ -193,9 +227,12 @@ def issue_validated_query(
     sql, ordered = _to_positional(query, parameters, dialect)
     if PREFIX in sql:
         raise reject(Reason.TOKEN_NOT_REPLACED)
+    domains = decision.domains or (None,) * len(decision.protected)
     outputs = tuple(
-        OutputPlan(output.label, output.kind, output.source, protected)
-        for output, protected in zip(analyzed.outputs, decision.protected, strict=True)
+        OutputPlan(output.label, output.kind, output.source, protected, domain)
+        for output, protected, domain in zip(
+            analyzed.outputs, decision.protected, domains, strict=True
+        )
     )
     return ValidatedQuery(
         _SEAL,
@@ -205,5 +242,8 @@ def issue_validated_query(
         sql=sql,
         parameters=ordered,
         outputs=outputs,
+        references=tuple(ref.source for ref in analyzed.references),
+        tables=tables,
         max_rows=max_rows,
+        min_count_cell=runtime.min_count_cell,
     )

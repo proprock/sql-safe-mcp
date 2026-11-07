@@ -3,10 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time as _time
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, overload
+from typing import Any, NamedTuple, overload
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -19,6 +20,14 @@ MAX_TOKEN_CHARS = 4096
 _NONCE_BYTES = 12
 _KEY_BYTES = 32
 _PAYLOAD_VERSION = 1
+# Payload is padded to a multiple of _PAD_BLOCK bytes so token length reveals only the bucket;
+# _PAD_FIELD_BYTES is the size of the empty `,"p":""` field added to the unpadded payload.
+_PAD_BLOCK = 32
+_PAD_FIELD_BYTES = len(b',"p":""')
+_PADDED_KEYS = {"v", "t", "d", "p"}
+# Tokens issued while a TTL is configured also carry "i", the issue time in whole Unix seconds.
+_TIMED_KEYS = {"v", "t", "d", "i", "p"}
+_KEY_SETS = (_PADDED_KEYS, _TIMED_KEYS)
 
 
 def _invalid_token() -> DomainError:
@@ -34,6 +43,12 @@ def _unsupported_value() -> DomainError:
         ErrorCode.QUERY_REJECTED,
         "Query rejected: a protected column contains a value that cannot be tokenized.",
         "Do not select this protected column.",
+    )
+
+
+def _dump(document: dict[str, Any]) -> bytes:
+    return json.dumps(document, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode(
+        "ascii"
     )
 
 
@@ -59,56 +74,76 @@ def _finite_decimal(value: Decimal, data: str) -> bool:
     return value.is_finite() and str(value) == data
 
 
-# tag -> (python type, to JSON data, from JSON data)
-_CODECS: dict[type, tuple[str, Callable[[Any], Any]]] = {
-    str: ("str", lambda v: v),
-    bool: ("bool", lambda v: v),
-    int: ("int", lambda v: v),
-    float: ("float", _encode_float),
-    Decimal: ("decimal", str),
-    date: ("date", date.isoformat),
-    datetime: ("datetime", datetime.isoformat),
-    time: ("time", time.isoformat),
-    UUID: ("uuid", str),
-    bytes: ("bytes", lambda v: base64.b64encode(v).decode("ascii")),
+def _same(value: Any) -> Any:
+    return value
+
+
+class _Codec(NamedTuple):
+    tag: str
+    encode: Callable[[Any], Any]  # Python value -> JSON data `d`
+    data_type: type  # JSON type of `d`
+    decode: Callable[[Any], Any]  # `d` -> Python value
+    canonical: Callable[[Any, Any], bool]  # does `d` re-encode exactly?
+
+
+_CODECS: dict[type, _Codec] = {
+    str: _Codec("str", _same, str, _same, _identity_check),
+    bool: _Codec("bool", _same, bool, _same, _identity_check),
+    int: _Codec("int", _same, int, _same, _identity_check),
+    float: _Codec("float", _encode_float, float, _same, _identity_check),
+    Decimal: _Codec("decimal", str, str, Decimal, _finite_decimal),
+    date: _Codec("date", date.isoformat, str, date.fromisoformat, lambda v, d: v.isoformat() == d),
+    datetime: _Codec(
+        "datetime", datetime.isoformat, str, datetime.fromisoformat, lambda v, d: v.isoformat() == d
+    ),
+    time: _Codec("time", time.isoformat, str, time.fromisoformat, lambda v, d: v.isoformat() == d),
+    UUID: _Codec("uuid", str, str, UUID, lambda v, d: str(v) == d),
+    bytes: _Codec(
+        "bytes",
+        lambda v: base64.b64encode(v).decode("ascii"),
+        str,
+        lambda d: base64.b64decode(d, validate=True),
+        _bytes_check,
+    ),
 }
-# tag -> (JSON type of `d`, parser, canonical-form check); interpreted at decode time by
-# _decode_value so every branch runs (and can be verified) per call.
-_DECODERS: dict[str, tuple[type, Callable[[Any], Any], Callable[[Any, Any], bool]]] = {
-    "str": (str, lambda d: d, _identity_check),
-    "bool": (bool, lambda d: d, _identity_check),
-    "int": (int, lambda d: d, _identity_check),
-    "float": (float, lambda d: d, _identity_check),
-    "decimal": (str, Decimal, _finite_decimal),
-    "date": (str, date.fromisoformat, lambda v, d: v.isoformat() == d),
-    "datetime": (str, datetime.fromisoformat, lambda v, d: v.isoformat() == d),
-    "time": (str, time.fromisoformat, lambda v, d: v.isoformat() == d),
-    "uuid": (str, UUID, lambda v, d: str(v) == d),
-    "bytes": (str, lambda d: base64.b64decode(d, validate=True), _bytes_check),
-}
+_BY_TAG = {codec.tag: codec for codec in _CODECS.values()}
 
 
 def _decode_value(tag: str, data: Any) -> Any:
-    kind, parse, check = _DECODERS[tag]
-    if type(data) is not kind:
+    codec = _BY_TAG[tag]
+    if type(data) is not codec.data_type:
         raise ValueError("wrong payload type")
-    value = parse(data)
-    if not check(value, data):
+    value = codec.decode(data)
+    if not codec.canonical(value, data):
         raise ValueError("non-canonical payload")
     return value
 
 
 class TokenCodec:
-    """AES-256-GCM tokens for one server alias; the alias is authenticated as AAD."""
+    """AES-256-GCM tokens for one server alias; the alias is authenticated as AAD.
 
-    __slots__ = ("_aad", "_aead", "_alias")
+    With a TTL, new tokens carry their issue time and expire `ttl_seconds` after it.
+    """
 
-    def __init__(self, alias: str, key: bytes) -> None:
+    __slots__ = ("_aead", "_alias", "_clock", "_ttl")
+
+    def __init__(
+        self,
+        alias: str,
+        key: bytes,
+        ttl_seconds: int | None = None,
+        clock: Callable[[], float] = _time.time,
+    ) -> None:
         if len(key) != _KEY_BYTES:
             raise ValueError(f"PII key must be {_KEY_BYTES} bytes")
         self._alias = alias
         self._aead = AESGCM(key)
-        self._aad = f"pii:v1\x00{alias}".encode()
+        self._ttl = ttl_seconds
+        self._clock = clock
+
+    def _aad(self, domain: str | None) -> bytes:
+        # The default domain is the alias itself.
+        return f"pii:v1\x00{self._alias}\x00{self._alias if domain is None else domain}".encode()
 
     def __repr__(self) -> str:
         return f"TokenCodec(alias={self._alias!r})"
@@ -118,43 +153,46 @@ class TokenCodec:
         return self._alias
 
     @overload
-    def encrypt(self, value: None) -> None: ...
+    def encrypt(self, value: None, domain: str | None = None) -> None: ...
 
     @overload
-    def encrypt(self, value: object) -> str: ...
+    def encrypt(self, value: object, domain: str | None = None) -> str: ...
 
-    def encrypt(self, value: object) -> str | None:
+    def encrypt(self, value: object, domain: str | None = None) -> str | None:
         """Tokenize a scalar; NULL stays None. Unsupported values fail closed."""
         if value is None:
             return None
-        entry = _CODECS.get(type(value))
-        if entry is None:
+        codec = _CODECS.get(type(value))
+        if codec is None:
             raise _unsupported_value()
-        tag, to_data = entry
         try:
-            payload = json.dumps(
-                {"v": _PAYLOAD_VERSION, "t": tag, "d": to_data(value)},
-                separators=(",", ":"),
-                ensure_ascii=True,
-                allow_nan=False,
-            ).encode("ascii")
+            document: dict[str, Any] = {
+                "v": _PAYLOAD_VERSION,
+                "t": codec.tag,
+                "d": codec.encode(value),
+            }
+            if self._ttl is not None:
+                document["i"] = int(self._clock())
+            unpadded = _dump(document)
+            document["p"] = "0" * (-(len(unpadded) + _PAD_FIELD_BYTES) % _PAD_BLOCK)
+            payload = _dump(document)
         except (ValueError, OverflowError) as exc:
             raise _unsupported_value() from exc
         nonce = os.urandom(_NONCE_BYTES)
-        sealed = nonce + self._aead.encrypt(nonce, payload, self._aad)
+        sealed = nonce + self._aead.encrypt(nonce, payload, self._aad(domain))
         token = PREFIX + base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
         if len(token) > MAX_TOKEN_CHARS:
             raise _unsupported_value()
         return token
 
-    def decrypt(self, token: str) -> object:
+    def decrypt(self, token: str, domain: str | None = None) -> object:
         """Return the value; every failure raises the same INVALID_PII_TOKEN error."""
         try:
-            return self._decrypt(token)
+            return self._decrypt(token, domain)
         except Exception:
             raise _invalid_token() from None
 
-    def _decrypt(self, token: str) -> object:
+    def _decrypt(self, token: str, domain: str | None) -> object:
         if len(token) > MAX_TOKEN_CHARS or not token.startswith(PREFIX):
             raise ValueError
         body = token[len(PREFIX) :]
@@ -166,9 +204,19 @@ class TokenCodec:
         if len(raw) < _NONCE_BYTES + 16:
             raise ValueError
         nonce, sealed = raw[:_NONCE_BYTES], raw[_NONCE_BYTES:]
-        payload = self._aead.decrypt(nonce, sealed, self._aad)
+        payload = self._aead.decrypt(nonce, sealed, self._aad(domain))
         document = json.loads(payload.decode("utf-8"), parse_constant=_reject_constant)
-        if not isinstance(document, dict) or set(document) != {"v", "t", "d"}:
+        if not isinstance(document, dict) or set(document) not in _KEY_SETS:
+            raise ValueError
+        issued = document.get("i", 0)
+        if type(issued) is not int or issued < 0:
+            raise ValueError
+        if self._ttl is not None and (
+            "i" not in document or int(self._clock()) - issued > self._ttl
+        ):
+            raise ValueError
+        padding = document["p"]
+        if type(padding) is not str or padding.strip("0"):
             raise ValueError
         version = document["v"]
         if type(version) is not int or version != _PAYLOAD_VERSION:
@@ -190,7 +238,7 @@ class TokenKeyRegistry:
         for alias, server in config.servers.items():
             key = server.key_bytes()
             if key is not None:
-                codecs[alias] = TokenCodec(alias, key)
+                codecs[alias] = TokenCodec(alias, key, ttl_seconds=config.runtime.token_ttl_seconds)
         return cls(codecs)
 
     def __repr__(self) -> str:

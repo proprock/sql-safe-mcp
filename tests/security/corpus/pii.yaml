@@ -218,6 +218,18 @@
 - name: token national literal
   sql: "SELECT Id FROM Users WHERE Email = N'{{TOKEN_OWN}}'"
   reason: national string literal is not a plain token literal
+- name: string token against decimal column
+  sql: "SELECT Id FROM Orders WHERE Total = '{{TOKEN_OWN}}'"
+  reason: token type must match the protected column type
+- name: integer token against decimal column
+  sql: "SELECT Id FROM Orders WHERE Total = '{{TOKEN_OWN_INT}}'"
+  reason: int token is not a decimal token
+- name: integer token against string column
+  sql: "SELECT Id FROM Users WHERE Email = '{{TOKEN_OWN_INT}}'"
+  reason: int token against a string column would make the database coerce or fail with the value
+- name: mixed token types in list
+  sql: "SELECT Id FROM Users WHERE Email IN ('{{TOKEN_OWN}}', '{{TOKEN_OWN_INT}}')"
+  reason: every list item must match the column type
 
 # --- malformed, tampered, oversized, cross-alias tokens ----------------------------------------
 - name: cross alias token
@@ -274,3 +286,21 @@
   sql: "SELECT Id FROM Users WHERE Email = '{{TOKEN_OTHER_KEY_SAME_ALIAS}}'"
   code: INVALID_PII_TOKEN
   reason: wrong key
+- name: denied column projected
+  sql: "SELECT Email FROM Contacts"
+  reason: a denied column cannot be referenced at all
+- name: denied table star
+  sql: "SELECT * FROM Contacts"
+  reason: star expansion reaches a denied column
+- name: denied column in where
+  sql: "SELECT Id FROM Contacts WHERE Email = 'x'"
+  reason: a denied column cannot be filtered on
+- name: denied column in order by
+  sql: "SELECT Id FROM Contacts ORDER BY Email"
+  reason: a denied column cannot reveal order
+- name: denied column through join
+  sql: "SELECT u.Id FROM Users u JOIN Contacts c ON c.Id = u.Id"
+  reason: a denied column cannot be used as a join key
+- name: denied column through alias
+  sql: "SELECT c.Email AS Id FROM Contacts c"
+  reason: a label does not hide a denied source

@@ -7,6 +7,67 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-07
+
+### Added
+
+- `sql-safe-mcp --verify-pii-rules [--strict]` connects to each `all_pii_safe` alias, reports how
+  many tables and columns every PII rule matches, and warns about rules that match nothing
+  (exit 2 with `--strict`) and about unprotected columns whose names look personal.
+- `logging.audit: true` writes one `sql_safe_mcp.audit` line per `execute_sql` call with the server,
+  database, tables and columns read, protected column count, row count, truncation, and elapsed
+  time (or the error `code`). It never contains SQL, bind values, rows, or tokens. Off by default;
+  the tool response is unchanged.
+- `--verify-pii-rules` also checks `pii.exposed_columns` and `pii.deny` entries (unmatched ones
+  warn and fail `--strict`) and, in `deny-by-default`, advises only on exposed columns.
+- `pii.mode: deny-by-default` protects every column not listed in `pii.exposed_columns`, and
+  `pii.deny` rejects any reference to a column with `QUERY_REJECTED` ("a denied column cannot be
+  referenced"). Existing configurations are unchanged. See `docs/configuration.md`.
+- `runtime.token_ttl_seconds` (off by default) rejects tokens older than the limit with
+  `INVALID_PII_TOKEN`. Enabling it also rejects tokens issued before it was set. The token format
+  stays `pii:v1:`.
+- `runtime.min_count_cell` (off by default) makes `execute_sql` return a `COUNT(*)` value from 1
+  to the threshold minus one as `null`, with the new column encoding `suppressed`. `0` is not
+  suppressed.
+- `pii_key_file` reads an alias key from a file instead of `pii_key_env`; a relative path is
+  resolved against the configuration file's directory. On POSIX the file must be owned by the
+  server user or root, with no access for others and no group write.
+
+### Security
+
+- With `logging.level: DEBUG`, the MCP SDK no longer writes a malformed protocol message to
+  stderr; its logger is held at `INFO` or above, because that message could carry SQL, tokens,
+  or rows.
+- `all_pii_safe` aliases now require verified TLS in `connection_url`: SQL Server needs
+  `Encrypt=yes` and rejects `TrustServerCertificate=yes` and `odbc_connect`; MySQL and MariaDB
+  need `ssl_ca` or `ssl_capath` and reject options that turn certificate checks off. A
+  configuration without them fails at startup with `CONFIG_ERROR`. `require_tls: false` on the
+  alias turns the check off and logs a warning at every start.
+- After loading the configuration, the server removes `pii_key_env` variables from its environment,
+  so child processes such as ODBC drivers no longer inherit PII keys.
+- `pii.rules` entries accept an optional `domain`. A token returned for a column of one domain is
+  rejected with `INVALID_PII_TOKEN` when compared with a column of another domain, so protected
+  values cannot be replayed across unrelated columns. Without `domain` the domain is the server
+  alias. Rules of different domains matching one column reject queries touching it with
+  `QUERY_REJECTED`.
+- PII tokens now pad their payload to a multiple of 32 bytes, so token length reveals only a
+  32-byte bucket of the plaintext length.
+- Tokens issued before padding and domains are rejected with `INVALID_PII_TOKEN`; agents must
+  request new tokens.
+- `execute_sql` now allows each SQL construct only in the positions the supported subset uses.
+  A bare column or literal used as a condition (`WHERE a`, `ON 1`, `WHERE a AND b = 1`) and any
+  other node in an unlisted position is rejected with `QUERY_REJECTED` before the database runs
+  the query.
+- `execute_sql` now checks a PII token against the type of the protected column it is compared
+  with. A string token compared with an integer or decimal column, or any token compared with a
+  column of an unrecognised type, is rejected with `QUERY_REJECTED` before the database runs the
+  query. Before, SQL Server could echo the decrypted value in a conversion error (for example
+  error 245).
+- Driver error messages in logs no longer carry values. Quoted literals (`'…'`, `N'…'`, `"…"`)
+  become `'***'` and digit runs of six or more become `***`, since SQL Server and MySQL echo the
+  offending value in conversion and duplicate-key errors. A failed `execute_sql` logs only the
+  driver error class and its SQLSTATE or numeric code, with no message text.
+
 ## [1.5.2] - 2026-10-05
 
 ### Security

@@ -95,7 +95,7 @@ or
 pip install sql-safe-mcp
 ```
 
-Pin a version when you want a fixed surface: `uvx sql-safe-mcp==1.5.2`.
+Pin a version when you want a fixed surface: `uvx sql-safe-mcp==2.0.0`.
 
 Requires Python 3.12–3.14, [uv](https://docs.astral.sh/uv/) (or `pip`), and
 [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server)
@@ -240,6 +240,8 @@ Protection covers the columns you list, so list every column that holds personal
   limits, and logging.
 - [Tool reference](docs/tools.md) - arguments, responses, errors, and the accepted SQL subset.
 - [Security model](docs/security-model.md) - trust boundaries, guarantees, limitations, and verification.
+- [Health data of minors](docs/health-data.md) - requirements, mechanisms, and an operator
+  checklist for medical deployments.
 - [Checks](docs/checks.md) - local, integration, and security verification commands.
 
 ## Security

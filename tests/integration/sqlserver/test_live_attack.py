@@ -254,3 +254,60 @@ def test_a_test_only_alias_with_the_same_key_still_rejects_the_token(attack_lab:
         assert again.row_count == 1
     finally:
         registry.dispose()
+
+
+def test_a_string_token_against_an_int_column_is_rejected_before_the_database(
+    attack_lab: AttackLab, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Before the type check SQL Server answered with error 245 that echoed the value."""
+    lab = attack_lab
+    value = "424242"
+    mark = lab.recorder.mark()
+    with caplog.at_level(logging.DEBUG):
+        error = error_of(lab, f"SELECT Id FROM Visits WHERE Hits = '{token(lab, value)}'")
+        listed = error_of(lab, f"SELECT Id FROM Visits WHERE Hits IN ('{token(lab, value)}')")
+    assert error.code is ErrorCode.QUERY_REJECTED
+    assert listed.code is ErrorCode.QUERY_REJECTED
+    # Reflection queries may reach the driver; the user's predicate must not.
+    sent = [statement for statement, _ in lab.recorder.since(mark)]
+    assert not [statement for statement in sent if "[Hits]" in statement and "WHERE" in statement]
+    captured = capfd.readouterr()
+    for text in (str(error), str(listed), caplog.text, captured.out, captured.err):
+        assert value not in text
+
+
+def test_aliased_expressions_over_a_protected_column_never_reach_the_driver(
+    attack_lab: AttackLab, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Audit finding C1: an aliased expression once projected a protected column in clear."""
+    lab = attack_lab
+    marker = lab.markers[0]
+    mark = lab.recorder.mark()
+    with caplog.at_level(logging.DEBUG):
+        errors = {
+            sql: error_of(lab, sql)
+            for sql in (
+                "SELECT (Email) AS e FROM Users",
+                "SELECT ((Email)) AS e FROM Users ORDER BY Id",
+                f"SELECT (Email = '{marker}') AS hit FROM Users",
+                "SELECT u.Id, (u.Phone) AS p FROM Users u",
+            )
+        }
+    sent = [statement for statement, _ in lab.recorder.since(mark)]
+    captured = capfd.readouterr()
+    texts = [str(error) for error in errors.values()]
+    texts += [caplog.text, captured.out, captured.err, *sent]
+    leaks = [m for m in lab.markers if any(m in text for text in texts)]
+    write_artifact(
+        "aliased-expressions",
+        {"codes": sorted({e.code.value for e in errors.values()}), "leaks": leaks},
+    )
+    assert {error.code for error in errors.values()} == {ErrorCode.QUERY_REJECTED}
+    assert not [s for s in sent if "[Users]" in s and ("[Email]" in s or "[Phone]" in s)]
+    assert leaks == []
+
+
+def test_an_int_token_against_an_int_column_runs(attack_lab: AttackLab) -> None:
+    lab = attack_lab
+    result = run(lab, f"SELECT Id FROM Visits WHERE Hits = '{codec(lab).encrypt(424242)}'")
+    assert result.rows == [[1]]

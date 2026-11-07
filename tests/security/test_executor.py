@@ -6,12 +6,14 @@ from typing import Any, ClassVar, cast
 from uuid import UUID
 
 import pytest
+from typed_columns import typed
 
 from sql_safe_mcp.config import PiiConfig, PiiRule, RuntimeConfig
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.dialect import SQLSERVER
 from sql_safe_mcp.security.executor import execute_validated
 from sql_safe_mcp.security.pipeline import validate_sql
+from sql_safe_mcp.security.schema import ColumnSchema
 from sql_safe_mcp.security.tokens import TokenCodec
 from sql_safe_mcp.security.validated_query import ValidatedQuery
 
@@ -29,8 +31,8 @@ class Catalog:
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
-    def columns(self, schema: str, table: str) -> Sequence[str]:
-        return self.tables[(schema, table)]
+    def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]:
+        return typed(self.tables[(schema, table)])
 
 
 class FakeResult:
@@ -141,6 +143,43 @@ def test_protected_cells_are_tokenized_and_null_stays_null() -> None:
     assert "a@b.c" not in json.dumps(result.rows)
 
 
+def test_protected_cells_are_tokenized_with_the_domain_of_their_column() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", schema="dbo", table="Users", columns=["Email"], domain="pii")]
+    )
+    query = validate_sql(
+        "SELECT Email, Name FROM Users",
+        alias="srv",
+        database="app",
+        catalog=Catalog(),
+        pii_config=config,
+        codec=CODEC,
+        runtime=RUNTIME,
+        max_rows=3,
+        dialect=SQLSERVER,
+    )
+    connection = RecordingConnection(FakeResult(["Email", "Name"], [("a@b.c", "n")]))
+    result = execute_validated(connection, query, CODEC)
+    cell = result.rows[0][0]
+    assert CODEC.decrypt(cell, "pii") == "a@b.c"
+    with pytest.raises(DomainError):
+        CODEC.decrypt(cell)
+    assert result.rows[0][1] == "n"
+
+
+def test_token_length_does_not_depend_on_plaintext_length_within_a_bucket() -> None:
+    sql = "SELECT Email, Id FROM Users"
+    keys = ["Email", "Id"]
+    _, _, short = run(sql, [("abc", 1), (None, 2)], keys=keys)
+    _, _, long = run(sql, [("a" * 20, 1), (None, 2)], keys=keys)
+    assert short.columns == long.columns
+    assert short.truncated == long.truncated
+    assert short.rows[1] == long.rows[1]
+    assert short.rows[0][1] == long.rows[0][1]
+    assert short.rows[0][0] != long.rows[0][0]
+    assert len(short.rows[0][0]) == len(long.rows[0][0])
+
+
 def test_protected_marker_never_appears_in_the_response() -> None:
     marker = "PII-MARKER-7f3a"
     _, _, result = run("SELECT Email FROM Users", [(marker,)], keys=["Email"])
@@ -238,6 +277,79 @@ def test_unsupported_protected_value_fails_closed() -> None:
     with pytest.raises(DomainError) as info:
         run("SELECT Email FROM Users", [(object(),)], keys=["Email"])
     assert info.value.code is ErrorCode.QUERY_REJECTED
+
+
+def _counted(rows: Sequence[tuple[Any, ...]], threshold: int):
+    query = validate_sql(
+        # Mixed outputs exercise per-column handling; the fake result supplies the rows.
+        "SELECT Name, COUNT(*) AS n, Id FROM Users",
+        alias="srv",
+        database="app",
+        catalog=Catalog(),
+        pii_config=PII,
+        codec=CODEC,
+        runtime=RuntimeConfig(default_max_rows=3, hard_max_rows=10, min_count_cell=threshold),
+        max_rows=10,
+        dialect=SQLSERVER,
+    )
+    connection = RecordingConnection(FakeResult(["Name", "n", "Id"], rows))
+    return execute_validated(connection, query, CODEC)
+
+
+def test_counts_below_the_threshold_are_suppressed() -> None:
+    result = _counted([("a", 4, 4), ("b", 5, 5), ("c", 0, 0), ("d", 1, 1), ("e", 9, 9)], 5)
+
+    assert result.rows == (("a", None, 4), ("b", 5, 5), ("c", 0, 0), ("d", None, 1), ("e", 9, 9))
+    assert [column.encoding for column in result.columns] == ["json", "suppressed", "json"]
+
+
+def test_count_column_without_small_values_keeps_its_encoding() -> None:
+    result = _counted([("a", 5, 1), ("b", 0, 2)], 5)
+
+    assert result.rows == (("a", 5, 1), ("b", 0, 2))
+    assert [column.encoding for column in result.columns] == ["json", "json", "json"]
+
+
+def test_zero_threshold_never_suppresses() -> None:
+    result = _counted([("a", 1, 1)], 0)
+
+    assert result.rows == (("a", 1, 1),)
+    assert result.columns[1].encoding == "json"
+
+
+def test_threshold_one_suppresses_nothing() -> None:
+    result = _counted([("a", 1, 1)], 1)
+
+    assert result.rows == (("a", 1, 1),)
+
+
+def test_threshold_applies_only_to_count_outputs() -> None:
+    result = _counted([("a", 7, 2)], 5)
+
+    assert result.rows == (("a", 7, 2),)
+
+
+@pytest.mark.parametrize("value", [Decimal(2), 2.0, True, "2"])
+def test_non_integer_count_fails_closed_when_suppressing(value: Any) -> None:
+    with pytest.raises(DomainError) as info:
+        _counted([("a", value, 1)], 5)
+    assert info.value.code is ErrorCode.DATABASE_ERROR
+
+
+def test_validated_query_carries_the_threshold() -> None:
+    query = validate_sql(
+        "SELECT COUNT(*) FROM Users",
+        alias="srv",
+        database="app",
+        catalog=Catalog(),
+        pii_config=PII,
+        codec=CODEC,
+        runtime=RuntimeConfig(min_count_cell=11),
+        max_rows=3,
+        dialect=SQLSERVER,
+    )
+
+    assert query.min_count_cell == 11
 
 
 def test_driver_failures_propagate_to_the_service_layer() -> None:

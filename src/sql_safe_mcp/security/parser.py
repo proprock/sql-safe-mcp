@@ -80,6 +80,37 @@ _ALLOWED_ARGS: dict[type[exp.Expr], frozenset[str]] = {
     **{comparison: frozenset({"this", "expression"}) for comparison in _COMPARISONS},
 }
 _PLACEHOLDER_ARGS = frozenset({"this"})
+_PREDICATE_PARENTS = frozenset({exp.Where, exp.And, exp.Or, exp.Paren, exp.Join})
+_VALUE_PARENTS = frozenset({*_COMPARISONS, exp.In})
+# node type -> parent types it may sit under (NoneType: the query root). A node type that is allowed
+# somewhere is still rejected in any position not listed here; a bare Column or Literal used as a
+# boolean (WHERE a, ON 1) is not a predicate operand, so And/Or/Paren/Where/Join are not parents.
+_ALLOWED_PARENTS: dict[type[exp.Expr], frozenset[type]] = {
+    exp.Select: frozenset({type(None)}),
+    exp.From: frozenset({exp.Select}),
+    exp.Join: frozenset({exp.Select}),
+    exp.Where: frozenset({exp.Select}),
+    exp.Order: frozenset({exp.Select}),
+    exp.Limit: frozenset({exp.Select}),
+    exp.Table: frozenset({exp.From, exp.Join}),
+    exp.TableAlias: frozenset({exp.Table}),
+    exp.Identifier: frozenset({exp.Table, exp.TableAlias, exp.Column, exp.Alias}),
+    exp.Alias: frozenset({exp.Select}),
+    exp.Star: frozenset({exp.Select, exp.Column, exp.Count}),
+    exp.Count: frozenset({exp.Select, exp.Alias}),
+    exp.Column: frozenset({exp.Select, exp.Alias, exp.Ordered, exp.Is, *_VALUE_PARENTS}),
+    exp.Literal: frozenset({exp.Select, exp.Alias, exp.Neg, exp.Limit, *_VALUE_PARENTS}),
+    exp.Null: frozenset({exp.Select, exp.Alias, exp.Is}),
+    exp.Neg: frozenset({exp.Select, exp.Alias, *_VALUE_PARENTS}),
+    exp.Ordered: frozenset({exp.Order}),
+    exp.Paren: _PREDICATE_PARENTS,
+    exp.And: _PREDICATE_PARENTS,
+    exp.Or: _PREDICATE_PARENTS - {exp.And},  # an Or directly under And would drop its grouping
+    exp.Is: _PREDICATE_PARENTS,
+    exp.In: _PREDICATE_PARENTS,
+    **{comparison: _PREDICATE_PARENTS for comparison in _COMPARISONS},
+}
+_PLACEHOLDER_PARENTS = _VALUE_PARENTS
 # What an alias may name: a direct column, a literal, or COUNT(*). Anything else (a Paren, a
 # comparison, ...) would be invisible to lineage and could project a protected column in clear.
 # A Star under an alias is still rejected by the Star branch below with its own reason.
@@ -152,8 +183,16 @@ def _check_node(node: exp.Expr, allow_placeholders: bool) -> None:
                 raise reject(Reason.STAR_COMPARISON)
 
 
+def _check_position(node: exp.Expr) -> None:
+    kind = type(node)
+    parent_kind = type(node.parent)
+    parents = _PLACEHOLDER_PARENTS if kind is exp.Placeholder else _ALLOWED_PARENTS[kind]
+    if parent_kind not in parents:
+        raise reject(Reason.NODE_UNSUPPORTED, f"{kind.__name__} in {parent_kind.__name__}")
+
+
 def validate_allowlist(query: exp.Expression, *, allow_placeholders: bool = False) -> None:
-    """Fail closed on any node type, argument, or shape outside the supported subset."""
+    """Fail closed on any node type, argument, shape, or position outside the supported subset."""
     if not isinstance(query, exp.Select):
         raise reject(Reason.SELECT_ONLY)
     for node in query.walk():
@@ -161,6 +200,8 @@ def validate_allowlist(query: exp.Expression, *, allow_placeholders: bool = Fals
     for projection in query.expressions:
         if not isinstance(projection, _PROJECTIONS):
             raise reject(Reason.PROJECTION_UNSUPPORTED)
+    for node in query.walk():
+        _check_position(node)
 
 
 def strip_comments(query: exp.Expression) -> None:

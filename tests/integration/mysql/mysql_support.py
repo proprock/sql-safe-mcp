@@ -68,9 +68,15 @@ def build_sql_config(
             alias: ServerConfig(
                 engine=engine,
                 access_level="all_pii_safe",
+                require_tls=False,  # the test container has no verified TLS
                 connection_url=SecretStr(url.render_as_string(hide_password=False)),
                 pii_key_env=f"KEY_{alias.upper()}",
-                pii=PiiConfig(rules=[PiiRule(database="*", table="people", columns=["email"])]),
+                pii=PiiConfig(
+                    rules=[
+                        PiiRule(database="*", table="people", columns=["email"]),
+                        PiiRule(database="*", table="visits", columns=["hits"]),
+                    ]
+                ),
                 pii_key=SecretStr(base64.b64encode(key).decode()),
             )
             for alias, key in keys.items()
@@ -149,6 +155,8 @@ def live_server(engine: Engine) -> Iterator[LiveMySql]:
             ) ENGINE=InnoDB""",
             f"CREATE TABLE `{sql_database}`.`canary` (id INT PRIMARY KEY)",
             f"INSERT INTO `{sql_database}`.`canary` VALUES (1), (2), (3)",
+            f"CREATE TABLE `{sql_database}`.`visits` (id INT PRIMARY KEY, hits INT NOT NULL)",
+            f"INSERT INTO `{sql_database}`.`visits` VALUES (1, 424242), (2, 515151)",
         ]
         people = f"INSERT INTO `{sql_database}`.`people` (id, name, email) VALUES (%s, %s, %s)"
         setup += [

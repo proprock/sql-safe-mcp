@@ -6,6 +6,8 @@ from uuid import UUID
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from hypothesis import given
+from hypothesis import strategies as st
 
 from sql_safe_mcp.config import AppConfig
 from sql_safe_mcp.errors import DomainError, ErrorCode
@@ -35,9 +37,9 @@ VALUES = [
 ]
 
 
-def invalid(token: str, codec: TokenCodec) -> DomainError:
+def invalid(token: str, codec: TokenCodec, domain: str | None = None) -> DomainError:
     with pytest.raises(DomainError) as info:
-        codec.decrypt(token)
+        codec.decrypt(token, domain)
     assert info.value.code is ErrorCode.INVALID_PII_TOKEN
     return info.value
 
@@ -61,16 +63,102 @@ def test_nonce_is_random() -> None:
     assert codec.encrypt("same") != codec.encrypt("same")
 
 
-def test_token_layout_is_nonce_ciphertext_tag() -> None:
+def _raw_len(token: str) -> int:
+    body = token.removeprefix("pii:v1:")
+    return len(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+
+def test_token_layout_is_nonce_padded_ciphertext_tag() -> None:
     token = TokenCodec("srv", KEY).encrypt("a")
-    raw = base64.urlsafe_b64decode(token.removeprefix("pii:v1:") + "==")
-    assert len(raw) == 12 + len(b'{"v":1,"t":"str","d":"a"}') + 16
+    assert _raw_len(token) == 12 + 32 + 16
+
+
+def test_token_length_reveals_only_the_32_byte_bucket() -> None:
+    codec = TokenCodec("srv", KEY)
+    # Payload is 31 + len(s) bytes: {"v":1,"t":"str","d":""} (24) + ,"p":"" (7) + s.
+    lengths = {n: _raw_len(codec.encrypt("a" * n)) for n in range(0, 100)}
+    assert {lengths[n] for n in range(0, 2)} == {12 + 32 + 16}
+    assert {lengths[n] for n in range(2, 34)} == {12 + 64 + 16}
+    assert {lengths[n] for n in range(34, 66)} == {12 + 96 + 16}
+    assert lengths[66] == 12 + 128 + 16
+    assert all((lengths[n] - 12 - 16) % 32 == 0 for n in lengths)
+
+
+def test_all_value_types_are_padded_to_the_block() -> None:
+    codec = TokenCodec("srv", KEY)
+    for value in VALUES:
+        assert (_raw_len(codec.encrypt(value)) - 28) % 32 == 0
+
+
+@given(st.text(max_size=300))
+def test_token_length_depends_only_on_payload_bucket(text: str) -> None:
+    codec = TokenCodec("srv", KEY)
+    unpadded = len(
+        json.dumps(
+            {"v": 1, "t": "str", "d": text}, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+    )
+    blocks = -(-(unpadded + len(b',"p":""')) // 32)
+    assert _raw_len(codec.encrypt(text)) == 12 + blocks * 32 + 16
+
+
+def test_token_without_padding_field_is_rejected() -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "old"}, separators=(",", ":")).encode()
+    invalid(_forge("srv", payload), TokenCodec("srv", KEY))
+
+
+def test_padding_field_with_zeros_is_accepted_including_empty() -> None:
+    for pad in ("", "0", "0" * 40):
+        payload = json.dumps({"v": 1, "t": "str", "d": "x", "p": pad}, separators=(",", ":"))
+        assert TokenCodec("srv", KEY).decrypt(_forge("srv", payload.encode())) == "x"
+
+
+@pytest.mark.parametrize("pad", ["1", "00a", " ", "0 ", 0, None, ["0"]])
+def test_non_canonical_padding_is_rejected(pad: object) -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "x", "p": pad}, separators=(",", ":"))
+    invalid(_forge("srv", payload.encode()), TokenCodec("srv", KEY))
 
 
 def test_token_is_bound_to_its_alias_even_with_the_same_key() -> None:
     token = TokenCodec("alpha", KEY).encrypt("secret")
     invalid(token, TokenCodec("beta", KEY))
     assert TokenCodec("alpha", KEY).decrypt(token) == "secret"
+
+
+def test_token_of_one_domain_is_not_accepted_in_another_domain_of_the_same_alias() -> None:
+    codec = TokenCodec("srv", KEY)
+    token = codec.encrypt("secret", "contact")
+    assert codec.decrypt(token, "contact") == "secret"
+    invalid(token, codec, "money")
+    invalid(token, codec)
+    invalid(codec.encrypt("secret"), codec, "contact")
+
+
+def test_default_domain_is_the_alias() -> None:
+    codec = TokenCodec("srv", KEY)
+    assert codec.decrypt(codec.encrypt("x", "srv")) == "x"
+    assert codec.decrypt(codec.encrypt("x"), "srv") == "x"
+
+
+def test_alias_only_aad_is_rejected() -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "old", "p": ""}).encode()
+    nonce = bytes(12)
+    sealed = AESGCM(KEY).encrypt(nonce, payload, b"pii:v1\x00srv")
+    token = "pii:v1:" + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
+
+    invalid(token, TokenCodec("srv", KEY))
+
+
+@pytest.mark.parametrize(
+    ("domain", "aad"),
+    [("contact", b"pii:v1\x00srv\x00contact"), (None, b"pii:v1\x00srv\x00srv")],
+)
+def test_domain_aad_bytes_are_pinned(domain: str | None, aad: bytes) -> None:
+    codec = TokenCodec("srv", KEY)
+    token = codec.encrypt("x", domain)
+    raw = base64.urlsafe_b64decode(token[len("pii:v1:") :] + "==")
+    payload = AESGCM(KEY).decrypt(raw[:12], raw[12:], aad)
+    assert json.loads(payload)["d"] == "x"
 
 
 def test_wrong_key_is_rejected_and_rotation_invalidates_tokens() -> None:
@@ -123,7 +211,7 @@ def test_wrong_key_wrong_alias_and_malformed_are_indistinguishable() -> None:
 
 def _forge(codec_alias: str, payload: bytes) -> str:
     nonce = bytes(12)
-    aad = f"pii:v1\x00{codec_alias}".encode()
+    aad = f"pii:v1\x00{codec_alias}\x00{codec_alias}".encode()
     sealed = AESGCM(KEY).encrypt(nonce, payload, aad)
     return "pii:v1:" + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
 
@@ -133,17 +221,17 @@ def _forge(codec_alias: str, payload: bytes) -> str:
     [
         b"not json",
         b"[]",
-        b'{"v":1,"t":"str"}',
-        b'{"v":1,"t":"str","d":1}',
-        b'{"v":2,"t":"str","d":"x"}',
-        b'{"v":1,"t":"unknown","d":"x"}',
-        b'{"v":1,"t":"str","d":"x","extra":1}',
-        b'{"v":1,"t":"int","d":"1"}',
-        b'{"v":1,"t":"int","d":true}',
-        b'{"v":1,"t":"bool","d":1}',
-        b'{"v":1,"t":"date","d":"nope"}',
-        b'{"v":1,"t":"bytes","d":"!!"}',
-        b'{"v":1,"t":"float","d":NaN}',
+        b'{"v":1,"t":"str","p":""}',
+        b'{"v":1,"t":"str","d":1,"p":""}',
+        b'{"v":2,"t":"str","d":"x","p":""}',
+        b'{"v":1,"t":"unknown","d":"x","p":""}',
+        b'{"v":1,"t":"str","d":"x","p":"","extra":1}',
+        b'{"v":1,"t":"int","d":"1","p":""}',
+        b'{"v":1,"t":"int","d":true,"p":""}',
+        b'{"v":1,"t":"bool","d":1,"p":""}',
+        b'{"v":1,"t":"date","d":"nope","p":""}',
+        b'{"v":1,"t":"bytes","d":"!!","p":""}',
+        b'{"v":1,"t":"float","d":NaN,"p":""}',
         b"\xff\xfe",
     ],
 )
@@ -152,7 +240,7 @@ def test_authentic_but_invalid_payload_is_rejected(payload: bytes) -> None:
 
 
 def test_forged_well_formed_payload_is_accepted_only_with_the_key() -> None:
-    payload = json.dumps({"v": 1, "t": "str", "d": "ok"}, separators=(",", ":")).encode()
+    payload = json.dumps({"v": 1, "t": "str", "d": "ok", "p": ""}, separators=(",", ":")).encode()
     assert TokenCodec("srv", KEY).decrypt(_forge("srv", payload)) == "ok"
 
 
@@ -182,7 +270,7 @@ def _config(keys: dict[str, bytes | None]) -> AppConfig:
     for alias, key in keys.items():
         server: dict[str, object] = {
             "engine": "sqlserver",
-            "connection_url": "mssql+pyodbc://u:p@h/d?driver=x",
+            "connection_url": "mssql+pyodbc://u:p@h/d?driver=x&Encrypt=yes",
         }
         if key is not None:
             server.update(
@@ -209,3 +297,70 @@ def test_registry_repr_hides_keys() -> None:
     registry = TokenKeyRegistry.from_config(_config({"a": KEY}))
     assert KEY.hex() not in repr(registry)
     assert base64.b64encode(KEY).decode() not in repr(registry)
+
+
+# --- token time-to-live --------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_ttl_accepts_a_token_up_to_its_age_limit_and_rejects_it_after() -> None:
+    clock = _Clock(1_700_000_000.5)
+    codec = TokenCodec("srv", KEY, ttl_seconds=60, clock=clock)
+    token = codec.encrypt("secret")
+
+    for age, accepted in ((0, True), (59, True), (60, True), (61, False), (3600, False)):
+        clock.now = 1_700_000_000.5 + age
+        if accepted:
+            assert codec.decrypt(token) == "secret"
+        else:
+            invalid(token, codec)
+
+
+def test_ttl_rejects_a_token_without_an_issue_time() -> None:
+    untimed = TokenCodec("srv", KEY).encrypt("secret")
+
+    invalid(untimed, TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(0)))
+
+
+def test_a_timed_token_is_accepted_when_ttl_is_off() -> None:
+    timed = TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(1000)).encrypt("secret")
+
+    assert TokenCodec("srv", KEY).decrypt(timed) == "secret"
+
+
+def test_issue_time_is_whole_seconds_in_the_padded_payload() -> None:
+    codec = TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(1234.9))
+    token = codec.encrypt("x")
+    raw = base64.urlsafe_b64decode(token[len("pii:v1:") :] + "==")
+    document = json.loads(AESGCM(KEY).decrypt(raw[:12], raw[12:], b"pii:v1\x00srv\x00srv"))
+
+    assert document["i"] == 1234
+    assert set(document) == {"v", "t", "d", "i", "p"}
+    assert (_raw_len(token) - 28) % 32 == 0
+
+
+@pytest.mark.parametrize("issued", ["1000", 1000.0, True, None, -1, [1000]])
+def test_a_non_canonical_issue_time_is_rejected(issued: object) -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "x", "i": issued, "p": ""})
+    token = _forge("srv", payload.encode())
+
+    invalid(token, TokenCodec("srv", KEY))
+    invalid(token, TokenCodec("srv", KEY, ttl_seconds=10**9, clock=_Clock(2000)))
+
+
+def test_registry_wires_the_ttl() -> None:
+    config = _config({"a": KEY})
+    config = config.model_copy(
+        update={"runtime": config.runtime.model_copy(update={"token_ttl_seconds": 60})}
+    )
+    codec = TokenKeyRegistry.from_config(config).codec_for("a")
+
+    invalid(TokenCodec("a", KEY).encrypt("x"), codec)
+    assert codec.decrypt(TokenCodec("a", KEY, ttl_seconds=60).encrypt("x")) == "x"

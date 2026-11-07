@@ -283,6 +283,127 @@ def test_database_failure_codes_do_not_depend_on_driver_language(
     asyncio.run(scenario())
 
 
+class _OpaqueFailure(Exception):
+    """A driver exception whose args carry nothing; only its text is meaningful."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+    def __str__(self) -> str:
+        return self.text
+
+
+class _ArglessOrig:
+    """A driver error object without an ``args`` attribute at all."""
+
+    def __str__(self) -> str:
+        return "localized error"
+
+
+@pytest.mark.parametrize(
+    ("orig", "expected"),
+    [
+        (_PyMySqlFailure(-2, "localized error"), ErrorCode.TIMEOUT),
+        (_OpaqueFailure("query timeout expired"), ErrorCode.TIMEOUT),
+        (_OpaqueFailure("state hyt00 seen"), ErrorCode.TIMEOUT),
+        (_OpaqueFailure("state hyt01 seen"), ErrorCode.TIMEOUT),
+        (_OdbcFailure("HYT00", "(4060) localized error"), ErrorCode.TIMEOUT),
+        (_OdbcFailure("hyt00", "(4060) localized error"), ErrorCode.TIMEOUT),
+        (_OpaqueFailure("Cannot open database x"), ErrorCode.CONNECTION_FAILED),
+        (_OpaqueFailure("failure (4060)"), ErrorCode.CONNECTION_FAILED),
+        (_OpaqueFailure("state 08001 seen"), ErrorCode.CONNECTION_FAILED),
+        (_OpaqueFailure("state 08004 seen"), ErrorCode.CONNECTION_FAILED),
+        (_OpaqueFailure("permission was denied"), ErrorCode.ACCESS_DENIED),
+        (_PyMySqlFailure(4060.0, "localized error"), ErrorCode.DATABASE_ERROR),
+        (_PyMySqlFailure(True, "localized error"), ErrorCode.DATABASE_ERROR),
+        (_ArglessOrig(), ErrorCode.DATABASE_ERROR),
+    ],
+    ids=[
+        "native-timeout-only",
+        "text-timeout",
+        "text-hyt00",
+        "text-hyt01",
+        "upper-sqlstate-beats-native-connection",
+        "lower-sqlstate-beats-native-connection",
+        "text-cannot-open-database",
+        "text-4060",
+        "text-08001",
+        "text-08004",
+        "text-permission-was-denied",
+        "float-arg-is-not-a-native-code",
+        "bool-arg-is-not-a-native-code",
+        "orig-without-args",
+    ],
+)
+def test_each_driver_failure_signal_classifies_on_its_own(
+    orig: object, expected: ErrorCode
+) -> None:
+    service = _service(DBAPIError("SELECT secret", {"password": "hidden"}, cast(Exception, orig)))
+
+    async def scenario() -> None:
+        with pytest.raises(DomainError) as raised:
+            await service.list_databases("Alpha")
+        assert raised.value.code is expected
+
+    asyncio.run(scenario())
+
+
+def test_an_operational_error_without_a_known_signal_is_a_connection_failure() -> None:
+    service = _service(OperationalError("SELECT 1", None, _OpaqueFailure("link lost")))
+
+    async def scenario() -> None:
+        with pytest.raises(DomainError) as raised:
+            await service.list_databases("Alpha")
+        assert raised.value.code is ErrorCode.CONNECTION_FAILED
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("orig", "code", "message", "retryable"),
+    [
+        (_OdbcFailure("HYT00", "x"), ErrorCode.TIMEOUT, "The database operation timed out.", True),
+        (
+            _OdbcFailure("08001", "x"),
+            ErrorCode.CONNECTION_FAILED,
+            "Could not connect to the configured database server.",
+            True,
+        ),
+        (
+            _OdbcFailure("28000", "x"),
+            ErrorCode.ACCESS_DENIED,
+            "The database denied this operation.",
+            False,
+        ),
+        (
+            _OpaqueFailure("access denied"),
+            ErrorCode.ACCESS_DENIED,
+            "The database denied this operation.",
+            False,
+        ),
+    ],
+    ids=["timeout", "connection", "denied-by-code", "denied-by-text"],
+)
+def test_classified_failures_have_a_fixed_public_message_and_retry_flag(
+    orig: Exception, code: ErrorCode, message: str, retryable: bool
+) -> None:
+    service = _service(DBAPIError("SELECT secret", None, orig))
+
+    async def scenario() -> DomainError:
+        with pytest.raises(DomainError) as raised:
+            await service.list_databases("Alpha")
+        return raised.value
+
+    error = asyncio.run(scenario())
+    assert (error.code, error.public_message, error.hint, error.retryable) == (
+        code,
+        message,
+        None,
+        retryable,
+    )
+
+
 def test_connection_code_takes_precedence_over_access_denied_codes() -> None:
     service = _service(
         DBAPIError(

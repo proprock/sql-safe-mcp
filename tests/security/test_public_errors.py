@@ -96,10 +96,23 @@ def test_unsupported_constructs_name_the_offender(sql: str, expected: str) -> No
         ("SELECT Email FROM Users ORDER BY Id, Email", Reason.PROTECTED_POSITION),
         ("SELECT Id FROM Users WHERE Email = 'plain'", Reason.PROTECTED_NEEDS_TOKEN),
         ("SELECT Id FROM Users WHERE Name = 'pii:v1:AAAA'", Reason.TOKEN_OUTSIDE_PROTECTED),
+        (f"SELECT Id FROM Users WHERE Email = '{OWN.encrypt(1)}'", Reason.TOKEN_TYPE_MISMATCH),
+        ("SELECT Email FROM Contacts", Reason.COLUMN_DENIED),
+        ("SELECT * FROM Contacts", Reason.COLUMN_DENIED),
     ],
 )
 def test_reasons_are_reported_verbatim(sql: str, reason: Reason) -> None:
     assert message_of(sql) == f"Query rejected: {reason.value}."
+
+
+def test_domain_conflict_text_is_pinned() -> None:
+    assert Reason.DOMAIN_CONFLICT.value == (
+        "pii rules of different token domains match the same column"
+    )
+
+
+def test_column_denied_text_is_pinned() -> None:
+    assert Reason.COLUMN_DENIED.value == "a denied column cannot be referenced"
 
 
 def test_limits_are_reported_verbatim() -> None:
@@ -184,6 +197,7 @@ def test_validated_query_refuses_forgery_copy_and_serialization_with_clear_messa
             parameters=(),
             outputs=(),
             max_rows=1,
+            min_count_cell=0,
         )
     with raises_exact(TypeError, "ValidatedQuery cannot be copied"):
         copy.copy(query)
@@ -218,4 +232,10 @@ def test_alias_is_reported_by_the_query_and_the_codec() -> None:
     assert query.alias == ALIAS == OWN.alias
     assert re.fullmatch(
         r"ValidatedQuery\(alias='srv', database='app', outputs=1, parameters=0\)", repr(query)
+    )
+
+
+def test_token_type_mismatch_text_is_pinned() -> None:
+    assert Reason.TOKEN_TYPE_MISMATCH.value == (
+        "a PII token does not match the type of the protected column"
     )

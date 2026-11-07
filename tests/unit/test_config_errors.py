@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from sql_safe_mcp.config import AppConfig, load_config
 from sql_safe_mcp.errors import DomainError, ErrorCode
 
-URL = "mssql+pyodbc://u:p@sql/master?driver=x"
+URL = "mssql+pyodbc://u:p@sql/master?driver=x&Encrypt=yes"
 
 
 def _yaml(url: str = URL, extra: str = "", version: int = 1) -> str:
@@ -216,19 +216,23 @@ def test_model_level_validation_errors_are_reported() -> None:
         {"version": 1, "servers": {"s": metadata_with_pii}}
     )
     all_pii_safe_without_keys = dict(server, access_level="all_pii_safe")
-    assert "all_pii_safe servers require pii_key_env and pii rules" in summary(
+    assert "all_pii_safe servers require pii_key_env or pii_key_file, and pii rules" in summary(
         {"version": 1, "servers": {"s": all_pii_safe_without_keys}}
     )
 
 
+def _pii_summary(pii: dict[str, object]) -> str:
+    server = dict(cast(dict[str, dict[str, object]], _model("x")["servers"])["s"])
+    server["pii"] = pii
+    server["pii_key"] = base64.b64encode(bytes(32)).decode()
+    with pytest.raises(ValidationError) as info:
+        AppConfig.model_validate({"version": 1, "servers": {"s": server}})
+    return str(info.value)
+
+
 def test_pii_rule_validation_errors_are_reported() -> None:
     def summary(rule: dict[str, object]) -> str:
-        server = dict(cast(dict[str, dict[str, object]], _model("x")["servers"])["s"])
-        server["pii"] = {"rules": [rule]}
-        server["pii_key"] = base64.b64encode(bytes(32)).decode()
-        with pytest.raises(ValidationError) as info:
-            AppConfig.model_validate({"version": 1, "servers": {"s": server}})
-        return str(info.value)
+        return _pii_summary({"rules": [rule]})
 
     base: dict[str, object] = {"database": "*", "table": "T", "columns": ["c"]}
     assert "wildcards are allowed only in pii rule table or database" in summary(
@@ -236,6 +240,48 @@ def test_pii_rule_validation_errors_are_reported() -> None:
     )
     assert "database must be an exact name or '*'" in summary(dict(base, database="a*"))
     assert "pii rule columns must be unique" in summary(dict(base, columns=["c", "C"]))
+
+
+@pytest.mark.parametrize(
+    ("section", "columns", "message"),
+    [
+        ("rules", ["*"], "pii rules and exposed_columns cannot list '*' columns; only deny can"),
+        (
+            "exposed_columns",
+            ["*"],
+            "pii rules and exposed_columns cannot list '*' columns; only deny can",
+        ),
+        ("deny", ["a*"], "a deny column wildcard must be exactly ['*']"),
+        ("deny", ["*", "b"], "a deny column wildcard must be exactly ['*']"),
+    ],
+    ids=["rules-star", "exposed-star", "deny-partial", "deny-star-and-name"],
+)
+def test_column_wildcards_are_reported_per_section(
+    section: str, columns: list[str], message: str
+) -> None:
+    rule: dict[str, object] = {"database": "*", "table": "T", "columns": ["c"]}
+    pii: dict[str, object] = {"rules": [rule]}
+    pii[section] = [dict(rule, columns=columns)]
+
+    assert message in _pii_summary(pii)
+
+
+@pytest.mark.parametrize(
+    ("section", "columns", "message"),
+    [
+        ("rules", ["*"], "pii rules and exposed_columns cannot list '*' columns; only deny can"),
+        ("deny", ["a*"], "a deny column wildcard must be exactly ['*']"),
+    ],
+    ids=["rules-star", "deny-partial"],
+)
+def test_column_wildcard_errors_are_the_exact_text(
+    section: str, columns: list[str], message: str
+) -> None:
+    rule: dict[str, object] = {"database": "*", "table": "T", "columns": ["c"]}
+    pii: dict[str, object] = {"rules": [rule]}
+    pii[section] = [dict(rule, columns=columns)]
+
+    assert f"Value error, {message} [type=value_error" in _pii_summary(pii)
 
 
 def test_table_patterns_are_valid_pii_rule_configuration() -> None:
