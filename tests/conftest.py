@@ -7,7 +7,7 @@ import pytest
 
 # configure_logging sets these process-wide; a test that builds the server with a quiet level
 # would otherwise silence INFO records, such as the audit trail, in every later test.
-_PINNED_LOGGERS = ("", "sql_safe_mcp", "sql_safe_mcp.audit", "sqlalchemy")
+_PINNED_LOGGERS = ("", "sql_safe_mcp", "sql_safe_mcp.audit", "sqlalchemy", "mcp")
 
 
 @pytest.fixture(autouse=True)

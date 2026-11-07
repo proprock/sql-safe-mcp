@@ -173,6 +173,30 @@ def test_configure_logging_sets_package_level_and_pins_sqlalchemy(
     assert "pii-plaintext" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        ("DEBUG", logging.INFO),
+        ("INFO", logging.INFO),
+        ("WARNING", logging.WARNING),
+        ("ERROR", logging.ERROR),
+    ],
+)
+def test_configure_logging_never_lets_the_mcp_sdk_log_below_info(
+    caplog: pytest.LogCaptureFixture, level: str, expected: int
+) -> None:
+    # At DEBUG the SDK logs a malformed JSON-RPC frame whole, with any SQL, tokens or rows in it.
+    caplog.set_level(logging.DEBUG)
+
+    configure_logging(level)
+    logging.getLogger("mcp.shared.jsonrpc_dispatcher").debug(
+        "transport yielded exception: %r", "frame-with-pii"
+    )
+
+    assert logging.getLogger("mcp").level == expected
+    assert "frame-with-pii" not in caplog.text
+
+
 def test_configure_logging_holds_only_the_sqlalchemy_logger_at_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

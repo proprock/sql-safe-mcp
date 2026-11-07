@@ -19,6 +19,10 @@ def configure_logging(level: str, audit: bool = False) -> None:
     logging.getLogger("sql_safe_mcp.audit").setLevel(logging.INFO if audit else logging.NOTSET)
     # SQLAlchemy inherits the root level and would echo statements with bind values at DEBUG.
     logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    # At DEBUG the MCP SDK logs a malformed JSON-RPC frame whole, with any SQL, tokens or rows.
+    sdk = logging.getLogger("mcp")
+    sdk.setLevel(level)
+    sdk.setLevel(max(logging.INFO, sdk.level))
 
 
 def secrets_for(url: str, alias: str) -> tuple[tuple[str, str], ...]:
