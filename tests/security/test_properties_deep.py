@@ -12,7 +12,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlglot import exp
 from support import Spec, specs
-from test_properties import ALIAS_NAMES, ALLOWED_KINDS, SEEDS, SQL_FRAGMENTS
+from test_properties import ALIAS_NAMES, ALLOWED_KINDS, QUOTED_NAMES, SEEDS, SQL_FRAGMENTS
 
 pytestmark = pytest.mark.deep
 DEEP = settings.get_profile("security-deep")
@@ -46,6 +46,18 @@ def test_deep_alias_rename_keeps_lineage(spec: Spec, seed: int) -> None:
 @given(specs(), SEEDS)
 def test_deep_generated_sql_reparses_and_validates(spec: Spec, seed: int) -> None:
     checks.check_generated_sql_reparses_and_validates(spec, seed)
+
+
+@settings(DEEP)
+@given(specs(), SEEDS)
+def test_deep_generated_sql_is_a_fixpoint(spec: Spec, seed: int) -> None:
+    checks.check_generated_sql_is_a_fixpoint(spec, seed)
+
+
+@settings(DEEP)
+@given(QUOTED_NAMES, QUOTED_NAMES)
+def test_deep_quoted_aliases_round_trip(column_alias: str, table_alias: str) -> None:
+    checks.check_quoted_aliases_round_trip(column_alias, table_alias)
 
 
 @settings(DEEP)

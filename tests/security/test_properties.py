@@ -88,6 +88,19 @@ def test_generated_sql_reparses_and_validates(spec: Spec, seed: int) -> None:
 
 
 @given(specs(), SEEDS)
+def test_generated_sql_is_a_fixpoint(spec: Spec, seed: int) -> None:
+    checks.check_generated_sql_is_a_fixpoint(spec, seed)
+
+
+QUOTED_NAMES = st.text(alphabet=checks.QUOTING_ALPHABET, min_size=1, max_size=12)
+
+
+@given(QUOTED_NAMES, QUOTED_NAMES)
+def test_quoted_aliases_round_trip(column_alias: str, table_alias: str) -> None:
+    checks.check_quoted_aliases_round_trip(column_alias, table_alias)
+
+
+@given(specs(), SEEDS)
 def test_every_forbidden_mutation_actually_changes_the_query(spec: Spec, seed: int) -> None:
     checks.check_every_forbidden_mutation_changes_the_query(spec, seed)
 

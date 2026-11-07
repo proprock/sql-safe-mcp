@@ -10,7 +10,7 @@ import contextlib
 import json
 from typing import Any
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 from support import (
     ALIAS,
     DATABASE,
@@ -77,6 +77,44 @@ def check_generated_sql_reparses_and_validates(spec: Spec, seed: int) -> None:
     validate_allowlist(reparsed)
     assert not list(reparsed.find_all(exp.Placeholder))
     assert PREFIX not in query.sql
+
+
+def with_tokens(sql: str, parameters: tuple[Any, ...], marker: str) -> str:
+    """Put a fresh token for each bind value back where its marker stands."""
+    pieces = sql.split(marker)
+    assert len(pieces) == len(parameters) + 1
+    out = [pieces[0]]
+    for value, piece in zip(parameters, pieces[1:], strict=True):
+        out += [f"'{OWN.encrypt(value)}'", piece]
+    return "".join(out)
+
+
+def check_generated_sql_is_a_fixpoint(spec: Spec, seed: int) -> None:
+    """Validating the server's own output, tokens restored, reproduces it exactly."""
+    first = validate(render(spec, seed))
+    second = validate(with_tokens(first.sql, first.parameters, "?"))
+    assert (second.sql, second.parameters) == (first.sql, first.parameters)
+
+
+QUOTING_ALPHABET = "]\"`\n%;-/*[\x00‮​'ab"
+
+
+def bracket(name: str) -> str:
+    return "[" + name.replace("]", "]]") + "]"
+
+
+def check_quoted_aliases_round_trip(column_alias: str, table_alias: str) -> None:
+    """A hostile alias is rejected, or the generated SQL parses back to the validated AST."""
+    sql = (
+        f"SELECT {bracket(table_alias)}.Id AS {bracket(column_alias)} "
+        f"FROM Users AS {bracket(table_alias)}"
+    )
+    try:
+        query = validate(sql)
+    except DomainError as error:
+        assert error.code is ErrorCode.QUERY_REJECTED
+        return
+    assert parse_one(query.sql, dialect="tsql") == query.ast
 
 
 def check_every_forbidden_mutation_changes_the_query(spec: Spec, seed: int) -> None:

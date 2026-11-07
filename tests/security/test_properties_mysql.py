@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from support import Spec, specs
-from test_properties import SEEDS, SQL_FRAGMENTS
+from test_properties import QUOTED_NAMES, SEEDS, SQL_FRAGMENTS
 
 MYSQL_FRAGMENTS = st.one_of(
     SQL_FRAGMENTS,
@@ -80,6 +80,54 @@ def test_mysql_only_validated_sql_is_ever_executed(text: str) -> None:
 @given(INJECTION_VALUES)
 def test_mysql_sql_looking_values_stay_binds(value: str) -> None:
     checks.check_sql_looking_values_stay_binds(value)
+
+
+@given(specs(), SEEDS)
+def test_mysql_generated_sql_is_a_fixpoint(spec: Spec, seed: int) -> None:
+    checks.check_generated_sql_is_a_fixpoint(spec, seed)
+
+
+@given(QUOTED_NAMES, QUOTED_NAMES)
+def test_mysql_quoted_aliases_round_trip(column_alias: str, table_alias: str) -> None:
+    checks.check_quoted_aliases_round_trip(column_alias, table_alias)
+
+
+@given(specs(), SEEDS)
+def test_dialects_agree_on_lineage(spec: Spec, seed: int) -> None:
+    checks.check_dialects_agree_on_lineage(spec, seed)
+
+
+@given(specs(), SEEDS, st.integers(0, 10_000))
+def test_dialects_reject_for_the_same_reason(spec: Spec, seed: int, mutation: int) -> None:
+    checks.check_dialects_reject_for_the_same_reason(spec, seed, mutation)
+
+
+@pytest.mark.deep
+@settings(DEEP)
+@given(specs(), SEEDS)
+def test_deep_mysql_generated_sql_is_a_fixpoint(spec: Spec, seed: int) -> None:
+    checks.check_generated_sql_is_a_fixpoint(spec, seed)
+
+
+@pytest.mark.deep
+@settings(DEEP)
+@given(QUOTED_NAMES, QUOTED_NAMES)
+def test_deep_mysql_quoted_aliases_round_trip(column_alias: str, table_alias: str) -> None:
+    checks.check_quoted_aliases_round_trip(column_alias, table_alias)
+
+
+@pytest.mark.deep
+@settings(DEEP)
+@given(specs(), SEEDS)
+def test_deep_dialects_agree_on_lineage(spec: Spec, seed: int) -> None:
+    checks.check_dialects_agree_on_lineage(spec, seed)
+
+
+@pytest.mark.deep
+@settings(DEEP)
+@given(specs(), SEEDS, st.integers(0, 10_000))
+def test_deep_dialects_reject_for_the_same_reason(spec: Spec, seed: int, mutation: int) -> None:
+    checks.check_dialects_reject_for_the_same_reason(spec, seed, mutation)
 
 
 @pytest.mark.deep
