@@ -65,8 +65,8 @@ executed except through the validated AST, and rejection reasons come from a fix
 
 ### Equivalent mutants
 
-The last complete mutation run (Linux, mutmut 3.8, 2503 mutants, after adding `diagnostics.py`
-and `service.py` to the mutated files) killed 2460 mutants, with no timeouts and no unclassified
+The last complete mutation run (Linux, mutmut 3.8, 2523 mutants, after adding `diagnostics.py`
+and `service.py` to the mutated files) killed 2480 mutants, with no timeouts and no unclassified
 survivors. The 43 survivors are equivalent to the original code:
 
 | Location | Mutation | Why it cannot change behavior |
