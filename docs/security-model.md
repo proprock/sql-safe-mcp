@@ -65,9 +65,9 @@ executed except through the validated AST, and rejection reasons come from a fix
 
 ### Equivalent mutants
 
-The last complete mutation run (Linux, mutmut 3.8, 2584 mutants, after adding `diagnostics.py`
-and `service.py` to the mutated files) killed 2540 mutants, with no timeouts and no unclassified
-survivors. The 44 survivors are equivalent to the original code:
+The last complete mutation run (Linux, mutmut 3.8, 2652 mutants, after adding `pii_key_file`)
+killed 2602 mutants, with no timeouts and no unclassified survivors. The 50 survivors are
+equivalent to the original code:
 
 | Location | Mutation | Why it cannot change behavior |
 |---|---|---|
@@ -83,6 +83,9 @@ survivors. The 44 survivors are equivalent to the original code:
 | `policy._token_site` (1) | `not isinstance(node, Literal) and not node.is_string` | The third disjunct (`not startswith(PREFIX)`) still rejects every non-literal and non-string node, and accepts exactly the same token literals. |
 | `config._expand_connection_url` (1) | `quote(..., safe="XXXX")` | `X` is unreserved and is never escaped. |
 | `config._check_verified_tls` (1) | missing `Encrypt` read as `"XXXX"` instead of `""` | Both defaults are outside the `Encrypt` allowlist, so a URL without `Encrypt` is rejected either way (tested). |
+| `config._check_key_file_owner`, `config._read_key_file` (4) | `"win32"` changed to another string | On Linux, where mutation runs, `sys.platform` is never `"win32"`, so the POSIX branch runs either way; Windows runs the unit tests without these checks. |
+| `config._read_key_file` (1) | reads `1024 + 2` bytes instead of `1024 + 1` | Any read longer than the limit is rejected as too large; one extra byte suffices to detect it (exact-limit and over-limit files tested). |
+| `config._read_key_file` (1) | `decode("ASCII")` instead of `decode("ascii")` | Codec names are case-insensitive. |
 | `config._validation_summary` (6) | `errors()` flags `include_url`, `include_context`, `include_input` | The summary reads only `loc` and `msg`; the flags only add keys that are never read. |
 | `diagnostics.secrets_for` (1) | `quote(..., safe="XXXX")` | `X` is unreserved and is never escaped. |
 | `service.execute_sql` (1) | access check `access_level != "all_pii_safe" or pii is None` with `and` | `ServerConfig.validate_security_shape` makes `pii` set exactly when the level is `all_pii_safe`, so both conditions deny the same aliases. |
