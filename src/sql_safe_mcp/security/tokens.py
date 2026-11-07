@@ -7,7 +7,7 @@ import time as _time
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, overload
+from typing import Any, NamedTuple, overload
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -74,41 +74,47 @@ def _finite_decimal(value: Decimal, data: str) -> bool:
     return value.is_finite() and str(value) == data
 
 
-# tag -> (python type, to JSON data, from JSON data)
-_CODECS: dict[type, tuple[str, Callable[[Any], Any]]] = {
-    str: ("str", lambda v: v),
-    bool: ("bool", lambda v: v),
-    int: ("int", lambda v: v),
-    float: ("float", _encode_float),
-    Decimal: ("decimal", str),
-    date: ("date", date.isoformat),
-    datetime: ("datetime", datetime.isoformat),
-    time: ("time", time.isoformat),
-    UUID: ("uuid", str),
-    bytes: ("bytes", lambda v: base64.b64encode(v).decode("ascii")),
+def _same(value: Any) -> Any:
+    return value
+
+
+class _Codec(NamedTuple):
+    tag: str
+    encode: Callable[[Any], Any]  # Python value -> JSON data `d`
+    data_type: type  # JSON type of `d`
+    decode: Callable[[Any], Any]  # `d` -> Python value
+    canonical: Callable[[Any, Any], bool]  # does `d` re-encode exactly?
+
+
+_CODECS: dict[type, _Codec] = {
+    str: _Codec("str", _same, str, _same, _identity_check),
+    bool: _Codec("bool", _same, bool, _same, _identity_check),
+    int: _Codec("int", _same, int, _same, _identity_check),
+    float: _Codec("float", _encode_float, float, _same, _identity_check),
+    Decimal: _Codec("decimal", str, str, Decimal, _finite_decimal),
+    date: _Codec("date", date.isoformat, str, date.fromisoformat, lambda v, d: v.isoformat() == d),
+    datetime: _Codec(
+        "datetime", datetime.isoformat, str, datetime.fromisoformat, lambda v, d: v.isoformat() == d
+    ),
+    time: _Codec("time", time.isoformat, str, time.fromisoformat, lambda v, d: v.isoformat() == d),
+    UUID: _Codec("uuid", str, str, UUID, lambda v, d: str(v) == d),
+    bytes: _Codec(
+        "bytes",
+        lambda v: base64.b64encode(v).decode("ascii"),
+        str,
+        lambda d: base64.b64decode(d, validate=True),
+        _bytes_check,
+    ),
 }
-# tag -> (JSON type of `d`, parser, canonical-form check); interpreted at decode time by
-# _decode_value so every branch runs (and can be verified) per call.
-_DECODERS: dict[str, tuple[type, Callable[[Any], Any], Callable[[Any, Any], bool]]] = {
-    "str": (str, lambda d: d, _identity_check),
-    "bool": (bool, lambda d: d, _identity_check),
-    "int": (int, lambda d: d, _identity_check),
-    "float": (float, lambda d: d, _identity_check),
-    "decimal": (str, Decimal, _finite_decimal),
-    "date": (str, date.fromisoformat, lambda v, d: v.isoformat() == d),
-    "datetime": (str, datetime.fromisoformat, lambda v, d: v.isoformat() == d),
-    "time": (str, time.fromisoformat, lambda v, d: v.isoformat() == d),
-    "uuid": (str, UUID, lambda v, d: str(v) == d),
-    "bytes": (str, lambda d: base64.b64decode(d, validate=True), _bytes_check),
-}
+_BY_TAG = {codec.tag: codec for codec in _CODECS.values()}
 
 
 def _decode_value(tag: str, data: Any) -> Any:
-    kind, parse, check = _DECODERS[tag]
-    if type(data) is not kind:
+    codec = _BY_TAG[tag]
+    if type(data) is not codec.data_type:
         raise ValueError("wrong payload type")
-    value = parse(data)
-    if not check(value, data):
+    value = codec.decode(data)
+    if not codec.canonical(value, data):
         raise ValueError("non-canonical payload")
     return value
 
@@ -156,12 +162,15 @@ class TokenCodec:
         """Tokenize a scalar; NULL stays None. Unsupported values fail closed."""
         if value is None:
             return None
-        entry = _CODECS.get(type(value))
-        if entry is None:
+        codec = _CODECS.get(type(value))
+        if codec is None:
             raise _unsupported_value()
-        tag, to_data = entry
         try:
-            document: dict[str, Any] = {"v": _PAYLOAD_VERSION, "t": tag, "d": to_data(value)}
+            document: dict[str, Any] = {
+                "v": _PAYLOAD_VERSION,
+                "t": codec.tag,
+                "d": codec.encode(value),
+            }
             if self._ttl is not None:
                 document["i"] = int(self._clock())
             unpadded = _dump(document)
