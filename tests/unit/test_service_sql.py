@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import itertools
 import logging
 import re
 from collections.abc import Callable, Sequence
+from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -12,6 +14,7 @@ from sqlalchemy.exc import DataError, DBAPIError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from typed_columns import typed
 
+from sql_safe_mcp import service as service_module
 from sql_safe_mcp.config import AppConfig
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.errors import DomainError, ErrorCode
@@ -452,3 +455,70 @@ def test_permission_errors_are_access_denied() -> None:
 def test_unsupported_result_types_are_a_controlled_error() -> None:
     service, _ = make(rows=[(object(),)])
     assert error_of(service, "SELECT Id FROM Users").code is ErrorCode.DATABASE_ERROR
+
+
+def test_execute_sql_denial_names_the_required_access_level() -> None:
+    service, _ = make()
+
+    error = error_of(service, "SELECT Id FROM Users", "code")
+
+    assert (error.code, error.public_message, error.hint) == (
+        ErrorCode.ACCESS_LEVEL_DENIED,
+        "execute_sql is available only for all_pii_safe servers.",
+        "Use a server configured with access_level all_pii_safe.",
+    )
+
+
+def test_catalog_factory_gets_the_open_connection_alias_and_database() -> None:
+    registry = FakeRegistry(FakeConnection(FakeResult(["Id"], [(1,)])))
+    seen: list[tuple[object, str, str]] = []
+
+    def factory(connection: Any, alias: str, database: str) -> FakeCatalog:
+        seen.append((connection, alias, database))
+        return FakeCatalog()
+
+    service = DatabaseService(_config(), cast(EngineRegistry, registry), catalog_factory=factory)
+    execute(service, "SELECT Id FROM Users")
+
+    assert seen == [(registry.connection, "secure", "app")]
+
+
+class _TwoTableCatalog(FakeCatalog):
+    tables: ClassVar[dict[tuple[str, str], list[str]]] = {
+        ("dbo", "Users"): ["Id", "Email", "Name"],
+        ("dbo", "Orders"): ["Id", "UserId"],
+    }
+
+
+def test_audit_line_joins_tables_with_a_comma_and_marks_no_table_with_a_dash(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = FakeRegistry(FakeConnection(FakeResult(["a", "b"], [(1, 2)])))
+    service = DatabaseService(
+        _config(audit=True),
+        cast(EngineRegistry, registry),
+        catalog_factory=lambda connection, alias, database: _TwoTableCatalog(),
+    )
+    with caplog.at_level(logging.INFO):
+        execute(
+            service, "SELECT u.Id AS a, o.Id AS b FROM Users u JOIN Orders o ON o.UserId = u.Id"
+        )
+        execute(service, "SELECT 1 AS a, 2 AS b")
+
+    joined, empty = audit_lines(caplog)
+    assert " tables=dbo.Orders,dbo.Users columns=" in joined
+    assert " tables=- columns=- protected=0 " in empty
+
+
+def test_audit_elapsed_time_covers_the_whole_call(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = itertools.count(10.0, 1.0)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(perf_counter=lambda: next(clock)))
+    service, _ = make(rows=[(1,)], audit=True)
+
+    with caplog.at_level(logging.INFO):
+        execute(service, "SELECT Id FROM Users")
+
+    (line,) = audit_lines(caplog)
+    assert " elapsed_ms=3000 " in line
