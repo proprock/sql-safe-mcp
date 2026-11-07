@@ -65,9 +65,9 @@ executed except through the validated AST, and rejection reasons come from a fix
 
 ### Equivalent mutants
 
-The last complete mutation run (Linux, mutmut 3.8, 2523 mutants, after adding `diagnostics.py`
-and `service.py` to the mutated files) killed 2480 mutants, with no timeouts and no unclassified
-survivors. The 43 survivors are equivalent to the original code:
+The last complete mutation run (Linux, mutmut 3.8, 2584 mutants, after adding `diagnostics.py`
+and `service.py` to the mutated files) killed 2540 mutants, with no timeouts and no unclassified
+survivors. The 44 survivors are equivalent to the original code:
 
 | Location | Mutation | Why it cannot change behavior |
 |---|---|---|
@@ -82,6 +82,7 @@ survivors. The 43 survivors are equivalent to the original code:
 | `lineage._cross_check` (9) | column type value, `expand_stars` omitted/`True`/`None`, `validate_qualify_columns` omitted, `cast(None, ...)` | This is a second opinion; column types are unused, the checked query contains no stars, `validate_qualify_columns` defaults to `True`, and `cast` is a runtime no-op. Its behavior with the schema and validation enabled is pinned by direct tests. |
 | `policy._token_site` (1) | `not isinstance(node, Literal) and not node.is_string` | The third disjunct (`not startswith(PREFIX)`) still rejects every non-literal and non-string node, and accepts exactly the same token literals. |
 | `config._expand_connection_url` (1) | `quote(..., safe="XXXX")` | `X` is unreserved and is never escaped. |
+| `config._check_verified_tls` (1) | missing `Encrypt` read as `"XXXX"` instead of `""` | Both defaults are outside the `Encrypt` allowlist, so a URL without `Encrypt` is rejected either way (tested). |
 | `config._validation_summary` (6) | `errors()` flags `include_url`, `include_context`, `include_input` | The summary reads only `loc` and `msg`; the flags only add keys that are never read. |
 | `diagnostics.secrets_for` (1) | `quote(..., safe="XXXX")` | `X` is unreserved and is never escaped. |
 | `service.execute_sql` (1) | access check `access_level != "all_pii_safe" or pii is None` with `and` | `ServerConfig.validate_security_shape` makes `pii` set exactly when the level is `all_pii_safe`, so both conditions deny the same aliases. |
