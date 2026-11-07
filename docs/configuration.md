@@ -102,7 +102,8 @@ servers:
 | `engine` | `sqlserver` (`mssql+pyodbc`), `mysql` or `mariadb` (both `mysql+pymysql`). MySQL and MariaDB have no schema level: `schema` is always `null`, and a `pii` rule for them must not set `schema` (the table is matched by `database` and `table`). |
 | `access_level` | `metadata` (default: navigation and table structure), `meta_and_code` (also stored procedures), or `all_pii_safe` (also `execute_sql`). `pii_safe` is not accepted. |
 | `connection_url` | Required. A SQLAlchemy `mssql+pyodbc://` (SQL Server) or `mysql+pymysql://` (MySQL, MariaDB) URL whose dialect must match `engine`. Treated as a secret. |
-| `pii_key_env` | Required for `all_pii_safe`, forbidden otherwise. The name of the environment variable holding the alias key; matches `^[A-Z_][A-Z0-9_]*$`. |
+| `pii_key_env` | For `all_pii_safe`, set this or `pii_key_file`; forbidden otherwise. The name of the environment variable holding the alias key; matches `^[A-Z_][A-Z0-9_]*$`. |
+| `pii_key_file` | For `all_pii_safe`, set this or `pii_key_env`; forbidden otherwise. Path to a file holding the alias key; see [Key file or environment variable](#key-file-or-environment-variable). |
 | `pii` | Required for `all_pii_safe`, forbidden otherwise. Holds `rules`; see [PII rules](#pii-rules). |
 | `require_tls` | `all_pii_safe` only, default `true`: `connection_url` must request verified TLS. `false` turns the check off and logs a warning at startup; see [Verified TLS](#verified-tls). Forbidden on other access levels. |
 
@@ -192,8 +193,9 @@ connection_url: "mssql+pyodbc://${DEV_SQL_USER}:${DEV_SQL_PASSWORD}@${DEV_SQL_HO
 
 ## All-PII-safe servers
 
-`all_pii_safe` enables `execute_sql` for a server alias. Such an alias requires its own base64-encoded 32-byte key in the variable named by `pii_key_env`,
-plus at least one effective PII rule. Effective rules can be local under `pii.rules`, inherited
+`all_pii_safe` enables `execute_sql` for a server alias. Such an alias requires its own
+base64-encoded 32-byte key, from a file (`pii_key_file`) or an environment variable
+(`pii_key_env`), plus at least one effective PII rule. Effective rules can be local under `pii.rules`, inherited
 from an unnamed default set, or explicitly included from named shared sets.
 
 ```
@@ -201,10 +203,8 @@ sql-safe-mcp --gen-pii-key
 ```
 
 The command prints one key to stdout and exits without loading the configuration or connecting to a
-database. Store that value in the secret environment or configuration used by your MCP host under
-the variable named by `pii_key_env`; never put it in the YAML file. To generate a separate key for
-each of several aliases, pass a positive count. The command prints exactly that many keys, one per
-line:
+database. Never put the key itself in the YAML file. To generate a separate key for each of several
+aliases, pass a positive count. The command prints exactly that many keys, one per line:
 
 ```
 sql-safe-mcp --gen-pii-key 3
@@ -213,7 +213,31 @@ sql-safe-mcp --gen-pii-key 3
 A key reused by two aliases is rejected. Tokens authenticate the alias as associated data, so
 they cannot cross aliases even if keys are duplicated outside normal config loading. Rotating a key
 or renaming an alias will invalidate existing tokens. `metadata` and `meta_and_code` servers must
-not set `pii_key_env` or `pii`.
+not set `pii_key_env`, `pii_key_file` or `pii`.
+
+### Key file or environment variable
+
+Prefer a key file, such as a secret mount. Set exactly one of the two per alias:
+
+| Setting | Meaning |
+|---|---|
+| `pii_key_file` | Path to a file holding the key. A relative path is resolved against the directory of the YAML file, never against the working directory. Surrounding whitespace, such as the newline that `sql-safe-mcp --gen-pii-key > app.key` writes, is ignored; the file may hold at most 1024 bytes. |
+| `pii_key_env` | Name of an environment variable holding the key. |
+
+On Linux and macOS the key file must be a regular file owned by the server's user or by root, with
+no access for others and no group write: modes `0600`, `0640` and `0440` pass, `0644` fails. A
+Kubernetes secret volume therefore needs `defaultMode: 0440` and an `fsGroup` that the server runs
+in. On Windows only the file's presence and size are checked; restrict it with an ACL.
+
+```
+sql-safe-mcp --gen-pii-key > /etc/sql-safe-mcp/app.key
+chmod 600 /etc/sql-safe-mcp/app.key
+```
+
+After the configuration loads, the server removes every `pii_key_env` variable from its own
+environment, so child processes such as ODBC drivers do not inherit the key. This does not erase
+the environment the process was started with: on Linux, `/proc/<pid>/environ` still shows it to the
+same user and to root. A key file leaves no such copy.
 
 ### Verified TLS
 

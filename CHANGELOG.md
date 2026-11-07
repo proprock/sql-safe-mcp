@@ -24,6 +24,9 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - `runtime.token_ttl_seconds` (off by default) rejects tokens older than the limit with
   `INVALID_PII_TOKEN`. Enabling it also rejects tokens issued before it was set. The token format
   stays `pii:v1:`.
+- `pii_key_file` reads an alias key from a file instead of `pii_key_env`; a relative path is
+  resolved against the configuration file's directory. On POSIX the file must be owned by the
+  server user or root, with no access for others and no group write.
 
 ### Security
 
@@ -32,6 +35,8 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
   need `ssl_ca` or `ssl_capath` and reject options that turn certificate checks off. A
   configuration without them fails at startup with `CONFIG_ERROR`. `require_tls: false` on the
   alias turns the check off and logs a warning at every start.
+- After loading the configuration, the server removes `pii_key_env` variables from its environment,
+  so child processes such as ODBC drivers no longer inherit PII keys.
 - `pii.rules` entries accept an optional `domain`. A token returned for a column of one domain is
   rejected with `INVALID_PII_TOKEN` when compared with a column of another domain, so protected
   values cannot be replayed across unrelated columns. Without `domain` the domain is the server
