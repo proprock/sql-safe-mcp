@@ -525,7 +525,9 @@ Reading a failure: `connect failed ... elapsed_ms=` near the login timeout point
 logging in to the server, while `operation failed` after a `connect ok` points at the query itself.
 
 Connection URLs, credentials, keys, tokens, SQL text, bind values, and result rows are never
-logged. SQLAlchemy's own statement logging stays off at every level.
+logged. SQLAlchemy's own statement logging stays off at every level, and the MCP SDK never logs
+below `INFO`: at `DEBUG` it would write a malformed protocol message whole, with any SQL, token, or
+row in it.
 
 ### Audit log
 

@@ -33,6 +33,9 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- With `logging.level: DEBUG`, the MCP SDK no longer writes a malformed protocol message to
+  stderr; its logger is held at `INFO` or above, because that message could carry SQL, tokens,
+  or rows.
 - `all_pii_safe` aliases now require verified TLS in `connection_url`: SQL Server needs
   `Encrypt=yes` and rejects `TrustServerCertificate=yes` and `odbc_connect`; MySQL and MariaDB
   need `ssl_ca` or `ssl_capath` and reject options that turn certificate checks off. A
