@@ -19,7 +19,7 @@ servers:
   billing:
     # `sqlserver` uses an mssql+pyodbc URL; the URL dialect must match this engine.
     engine: sqlserver
-    # all_pii_safe requires both `pii_key_env` and at least one effective local PII rule.
+    # all_pii_safe requires a key (`pii_key_env` or `pii_key_file`) and at least one effective PII rule.
     access_level: all_pii_safe
     # all_pii_safe requires verified TLS: the URL must set Encrypt=yes and must not set
     # TrustServerCertificate=yes. `require_tls: false` turns the check off for a dev server.
