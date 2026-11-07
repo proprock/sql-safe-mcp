@@ -55,7 +55,7 @@ killed.
 - a live attack fixture that runs the whole corpus against SQL Server with a really writable
   login, compares a snapshot of every object and row before and after, and records every statement
   that reached the driver;
-- mutation testing of `security/*.py` and `config.py`.
+- mutation testing of `security/*.py`, `config.py`, `diagnostics.py`, and `service.py`.
 
 MySQL sessions drop `NO_BACKSLASH_ESCAPES` on connect so the generated string escaping means what
 the AST means; the live suite proves this with the mode enabled server-wide.
@@ -65,9 +65,9 @@ executed except through the validated AST, and rejection reasons come from a fix
 
 ### Equivalent mutants
 
-The last complete mutation run (Linux, mutmut 3.8, 1454 mutants, after the mysql dialect work)
-killed 1413 mutants, with no timeouts and no unclassified survivors. The 41 survivors are
-equivalent to the original code:
+The last complete mutation run (Linux, mutmut 3.8, 2503 mutants, after adding `diagnostics.py`
+and `service.py` to the mutated files) killed 2460 mutants, with no timeouts and no unclassified
+survivors. The 43 survivors are equivalent to the original code:
 
 | Location | Mutation | Why it cannot change behavior |
 |---|---|---|
@@ -83,6 +83,8 @@ equivalent to the original code:
 | `policy._token_site` (1) | `not isinstance(node, Literal) and not node.is_string` | The third disjunct (`not startswith(PREFIX)`) still rejects every non-literal and non-string node, and accepts exactly the same token literals. |
 | `config._expand_connection_url` (1) | `quote(..., safe="XXXX")` | `X` is unreserved and is never escaped. |
 | `config._validation_summary` (6) | `errors()` flags `include_url`, `include_context`, `include_input` | The summary reads only `loc` and `msg`; the flags only add keys that are never read. |
+| `diagnostics.secrets_for` (1) | `quote(..., safe="XXXX")` | `X` is unreserved and is never escaped. |
+| `service.execute_sql` (1) | access check `access_level != "all_pii_safe" or pii is None` with `and` | `ServerConfig.validate_security_shape` makes `pii` set exactly when the level is `all_pii_safe`, so both conditions deny the same aliases. |
 | `config.load_config` (2) | `read_text(encoding="UTF-8")` and `encoding=None` | The first is an alias. The second equals UTF-8 only where the default locale is UTF-8 (Linux/WSL, where mutation runs); on Windows `test_non_ascii_values_survive_loading` fails against it. |
 
 Message text of rejections is not accepted as equivalent: every `QUERY_REJECTED` reason is a
