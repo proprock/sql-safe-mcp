@@ -216,7 +216,7 @@ def test_model_level_validation_errors_are_reported() -> None:
         {"version": 1, "servers": {"s": metadata_with_pii}}
     )
     all_pii_safe_without_keys = dict(server, access_level="all_pii_safe")
-    assert "all_pii_safe servers require pii_key_env and pii rules" in summary(
+    assert "all_pii_safe servers require pii_key_env or pii_key_file, and pii rules" in summary(
         {"version": 1, "servers": {"s": all_pii_safe_without_keys}}
     )
 

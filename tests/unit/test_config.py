@@ -407,7 +407,11 @@ servers:
             "{include: [shared, shared]}",
             "more than once",
         ),
-        ("", "{include: []}", "all_pii_safe servers require pii_key_env and pii rules"),
+        (
+            "",
+            "{include: []}",
+            "all_pii_safe servers require pii_key_env or pii_key_file, and pii rules",
+        ),
     ],
 )
 def test_shared_rule_resolution_rejects_ambiguous_or_empty_effective_rules(
@@ -495,7 +499,8 @@ servers:
         load_config(path, {"URL": "mssql+pyodbc://u:p@meta/master?driver=x&Encrypt=yes"})
 
     assert raised.value.public_message == (
-        "Invalid configuration: metadata servers cannot configure pii_key_env or pii rules"
+        "Invalid configuration: metadata servers cannot configure "
+        "pii_key_env, pii_key_file or pii rules"
     )
 
 
@@ -519,7 +524,8 @@ servers:
         load_config(path, {"URL": "mssql+pyodbc://u:p@routines/master?driver=x&Encrypt=yes"})
 
     assert raised.value.public_message == (
-        "Invalid configuration: meta_and_code servers cannot configure pii_key_env or pii rules"
+        "Invalid configuration: meta_and_code servers cannot configure "
+        "pii_key_env, pii_key_file or pii rules"
     )
 
 

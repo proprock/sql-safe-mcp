@@ -4,6 +4,8 @@ import base64
 import binascii
 import os
 import re
+import stat
+import sys
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -157,6 +159,7 @@ class ServerConfigBase(BaseModel):
     access_level: Literal["metadata", "meta_and_code", "all_pii_safe"] = "metadata"
     connection_url: SecretStr
     pii_key_env: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]*$")
+    pii_key_file: str | None = Field(default=None, min_length=1)
     pii_key: SecretStr | None = Field(default=None, exclude=True)
     require_tls: bool = Field(default=True, strict=True)
 
@@ -244,16 +247,21 @@ class ServerConfig(ServerConfigBase):
     @model_validator(mode="after")
     def validate_security_shape(self) -> ServerConfig:
         if self.access_level == "all_pii_safe":
-            if not self.pii_key_env or self.pii is None:
-                raise ValueError("all_pii_safe servers require pii_key_env and pii rules")
+            if self.pii_key_env and self.pii_key_file:
+                raise ValueError("set either pii_key_env or pii_key_file, not both")
+            if not (self.pii_key_env or self.pii_key_file) or self.pii is None:
+                raise ValueError(
+                    "all_pii_safe servers require pii_key_env or pii_key_file, and pii rules"
+                )
             scoped = [*self.pii.rules, *self.pii.exposed_columns, *self.pii.deny]
             if self.engine != "sqlserver" and any(rule.schema_ for rule in scoped):
                 raise ValueError(f"pii rules for engine {self.engine!r} cannot set schema")
             if self.require_tls:
                 _check_verified_tls(self.engine, self.connection_url.get_secret_value())
-        elif self.pii_key_env is not None or self.pii is not None:
+        elif self.pii_key_env is not None or self.pii_key_file is not None or self.pii is not None:
             raise ValueError(
-                f"{self.access_level} servers cannot configure pii_key_env or pii rules"
+                f"{self.access_level} servers cannot configure "
+                "pii_key_env, pii_key_file or pii rules"
             )
         elif "require_tls" in self.model_fields_set:
             raise ValueError(f"{self.access_level} servers cannot configure require_tls")
@@ -356,7 +364,8 @@ def _resolve_pii_rules(raw: dict[object, object], config: AppConfigInput) -> dic
         if server.access_level != "all_pii_safe":
             if server.pii is not None:
                 raise ValueError(
-                    f"{server.access_level} servers cannot configure pii_key_env or pii rules"
+                    f"{server.access_level} servers cannot configure "
+                    "pii_key_env, pii_key_file or pii rules"
                 )
             continue
 
@@ -388,6 +397,58 @@ def _resolve_pii_rules(raw: dict[object, object], config: AppConfigInput) -> dic
     return resolved
 
 
+_KEY_FILE_LIMIT = 1024
+# Group write/execute and every "other" bit: a key file may be shared with the group read-only.
+_KEY_FILE_FORBIDDEN_BITS = 0o037
+
+
+def _decode_key(alias: object, text: str) -> str:
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"PII key for server {alias!r} is not valid base64") from exc
+    if len(decoded) != 32:
+        raise ValueError(f"PII key for server {alias!r} must decode to 32 bytes")
+    return text
+
+
+def _check_key_file_owner(alias: object, info: os.stat_result) -> None:
+    if sys.platform != "win32":
+        if info.st_uid not in (0, os.geteuid()):
+            raise ValueError(
+                f"PII key file for server {alias!r} must be owned by the server user or root"
+            )
+        if stat.S_IMODE(info.st_mode) & _KEY_FILE_FORBIDDEN_BITS:
+            raise ValueError(
+                f"PII key file for server {alias!r} must not be writable by group or accessible "
+                "by others (use mode 0600, 0640 or 0440)"
+            )
+
+
+def _read_key_file(alias: object, path: Path) -> str:
+    """Read a base64 key file; permissions are checked on the opened descriptor."""
+    try:
+        # O_NONBLOCK keeps a FIFO from blocking startup; it is rejected as non-regular below.
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError(f"PII key file for server {alias!r} is not a regular file")
+            _check_key_file_owner(alias, info)
+            data = os.read(descriptor, _KEY_FILE_LIMIT + 1)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise ValueError(f"PII key file for server {alias!r} cannot be read") from exc
+    if len(data) > _KEY_FILE_LIMIT:
+        raise ValueError(f"PII key file for server {alias!r} is larger than 1024 bytes")
+    try:
+        text = data.decode("ascii").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"PII key for server {alias!r} is not valid base64") from exc
+    return _decode_key(alias, text)
+
+
 def load_config(path: str | Path, environ: Mapping[str, str] | None = None) -> AppConfig:
     env = os.environ if environ is None else environ
     try:
@@ -405,18 +466,22 @@ def load_config(path: str | Path, environ: Mapping[str, str] | None = None) -> A
                 raise ValueError(f"server {alias!r} requires connection_url")
             value["connection_url"] = _expand_connection_url(url, env)
             key_env = value.get("pii_key_env")
+            key_file = value.get("pii_key_file")
             if key_env is not None:
                 if not isinstance(key_env, str) or key_env not in env:
                     raise ValueError(f"missing PII key environment variable {key_env!r}")
-                try:
-                    decoded = base64.b64decode(env[key_env], validate=True)
-                except (binascii.Error, ValueError) as exc:
-                    raise ValueError(f"PII key for server {alias!r} is not valid base64") from exc
-                if len(decoded) != 32:
-                    raise ValueError(f"PII key for server {alias!r} must decode to 32 bytes")
-                value["pii_key"] = env[key_env]
+                value["pii_key"] = _decode_key(alias, env[key_env])
+            elif isinstance(key_file, str) and key_file:
+                # Relative to the YAML file, never to the working directory of the MCP host.
+                value["pii_key"] = _read_key_file(alias, Path(path).parent / key_file)
         input_config = AppConfigInput.model_validate(raw)
-        return AppConfig.model_validate(_resolve_pii_rules(raw, input_config))
+        config = AppConfig.model_validate(_resolve_pii_rules(raw, input_config))
+        if environ is None:
+            # Child processes (ODBC drivers, shells) must not inherit the keys.
+            for server in config.servers.values():
+                if server.pii_key_env is not None:
+                    os.environ.pop(server.pii_key_env, None)
+        return config
     except ValidationError as exc:
         raise DomainError(
             ErrorCode.CONFIG_ERROR,

@@ -60,6 +60,25 @@ def test_check_config_uses_environment_path(tmp_path: Path) -> None:
     assert "Configuration valid" in result.stdout
 
 
+def test_check_config_reads_a_generated_key_file(tmp_path: Path) -> None:
+    key_file = tmp_path / "secrets" / "clinic.key"
+    key_file.parent.mkdir()
+    key_file.write_text(_run("--gen-pii-key").stdout, encoding="ascii")
+    key_file.chmod(0o600)
+    config = tmp_path / "pii.yaml"
+    config.write_text(
+        _PII_CONFIG.format(column="email").replace(
+            "pii_key_env: CLINIC_KEY", "pii_key_file: secrets/clinic.key"
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run("--config", str(config), "--check-config")
+
+    assert result.stderr == ""
+    assert result.stdout == "Configuration valid: 1 server alias(es).\n"
+
+
 def test_gen_pii_key_prints_one_valid_key_without_loading_configuration() -> None:
     result = _run("--gen-pii-key")
 
