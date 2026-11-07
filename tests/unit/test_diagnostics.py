@@ -96,6 +96,25 @@ def test_describe_error_redacts_quoted_literals_and_long_digit_runs(
     assert describe_error(RuntimeError(message), ()) == f"RuntimeError message={expected}"
 
 
+@pytest.mark.parametrize(
+    ("secret", "message", "expected"),
+    [
+        ("sa", "visa sa", "visa ***"),
+        ("sa", "sa-x", "***-x"),
+        ("!pw9", "x!pw9 y", "x*** y"),
+        ("pw9!", "y pw9!x", "y ***x"),
+        ("!pw9!", "a!pw9!b", "a***b"),
+    ],
+    ids=["word-edge-in-word", "word-edge-before-dash", "punct-start", "punct-end", "punct-both"],
+)
+def test_describe_error_bounds_only_word_character_edges_of_a_secret(
+    secret: str, message: str, expected: str
+) -> None:
+    line = describe_error(RuntimeError(message), ((secret, "***"),))
+
+    assert line == f"RuntimeError message={expected}"
+
+
 def test_describe_error_can_omit_the_message() -> None:
     error = _wrapped(_OdbcError("22018", "Conversion failed for value 'john@x.com'"))
 
@@ -152,6 +171,21 @@ def test_configure_logging_sets_package_level_and_pins_sqlalchemy(
     engine.dispose()
     assert not [record for record in caplog.records if record.name.startswith("sqlalchemy")]
     assert "pii-plaintext" not in caplog.text
+
+
+def test_configure_logging_holds_only_the_sqlalchemy_logger_at_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sqlalchemy_logger = logging.getLogger("sqlalchemy")
+    root = logging.getLogger()
+    # Earlier calls in the same process leave the level set; start from a clean slate.
+    monkeypatch.setattr(sqlalchemy_logger, "level", logging.NOTSET)
+    monkeypatch.setattr(root, "level", logging.INFO)
+
+    configure_logging("DEBUG")
+
+    assert sqlalchemy_logger.level == logging.WARNING
+    assert root.level == logging.INFO
 
 
 def test_configure_logging_keeps_the_audit_trail_below_a_quiet_package_level() -> None:
