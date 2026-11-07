@@ -102,9 +102,9 @@ def test_token_length_depends_only_on_payload_bucket(text: str) -> None:
     assert _raw_len(codec.encrypt(text)) == 12 + blocks * 32 + 16
 
 
-def test_legacy_token_without_padding_field_is_accepted() -> None:
+def test_token_without_padding_field_is_rejected() -> None:
     payload = json.dumps({"v": 1, "t": "str", "d": "old"}, separators=(",", ":")).encode()
-    assert TokenCodec("srv", KEY).decrypt(_forge("srv", payload)) == "old"
+    invalid(_forge("srv", payload), TokenCodec("srv", KEY))
 
 
 def test_padding_field_with_zeros_is_accepted_including_empty() -> None:
@@ -134,19 +134,30 @@ def test_token_of_one_domain_is_not_accepted_in_another_domain_of_the_same_alias
     invalid(codec.encrypt("secret"), codec, "contact")
 
 
-def test_default_domain_keeps_the_alias_only_aad() -> None:
+def test_default_domain_is_the_alias() -> None:
     codec = TokenCodec("srv", KEY)
-    legacy = _forge("srv", json.dumps({"v": 1, "t": "str", "d": "old"}).encode())
-    assert codec.decrypt(legacy, "srv") == "old"
     assert codec.decrypt(codec.encrypt("x", "srv")) == "x"
-    assert codec.decrypt(codec.encrypt("x")) == "x"
+    assert codec.decrypt(codec.encrypt("x"), "srv") == "x"
 
 
-def test_domain_aad_bytes_are_pinned() -> None:
+def test_alias_only_aad_is_rejected() -> None:
+    payload = json.dumps({"v": 1, "t": "str", "d": "old", "p": ""}).encode()
+    nonce = bytes(12)
+    sealed = AESGCM(KEY).encrypt(nonce, payload, b"pii:v1\x00srv")
+    token = "pii:v1:" + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
+
+    invalid(token, TokenCodec("srv", KEY))
+
+
+@pytest.mark.parametrize(
+    ("domain", "aad"),
+    [("contact", b"pii:v1\x00srv\x00contact"), (None, b"pii:v1\x00srv\x00srv")],
+)
+def test_domain_aad_bytes_are_pinned(domain: str | None, aad: bytes) -> None:
     codec = TokenCodec("srv", KEY)
-    token = codec.encrypt("x", "contact")
+    token = codec.encrypt("x", domain)
     raw = base64.urlsafe_b64decode(token[len("pii:v1:") :] + "==")
-    payload = AESGCM(KEY).decrypt(raw[:12], raw[12:], b"pii:v1\x00srv\x00contact")
+    payload = AESGCM(KEY).decrypt(raw[:12], raw[12:], aad)
     assert json.loads(payload)["d"] == "x"
 
 
@@ -200,7 +211,7 @@ def test_wrong_key_wrong_alias_and_malformed_are_indistinguishable() -> None:
 
 def _forge(codec_alias: str, payload: bytes) -> str:
     nonce = bytes(12)
-    aad = f"pii:v1\x00{codec_alias}".encode()
+    aad = f"pii:v1\x00{codec_alias}\x00{codec_alias}".encode()
     sealed = AESGCM(KEY).encrypt(nonce, payload, aad)
     return "pii:v1:" + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
 
@@ -210,17 +221,17 @@ def _forge(codec_alias: str, payload: bytes) -> str:
     [
         b"not json",
         b"[]",
-        b'{"v":1,"t":"str"}',
-        b'{"v":1,"t":"str","d":1}',
-        b'{"v":2,"t":"str","d":"x"}',
-        b'{"v":1,"t":"unknown","d":"x"}',
-        b'{"v":1,"t":"str","d":"x","extra":1}',
-        b'{"v":1,"t":"int","d":"1"}',
-        b'{"v":1,"t":"int","d":true}',
-        b'{"v":1,"t":"bool","d":1}',
-        b'{"v":1,"t":"date","d":"nope"}',
-        b'{"v":1,"t":"bytes","d":"!!"}',
-        b'{"v":1,"t":"float","d":NaN}',
+        b'{"v":1,"t":"str","p":""}',
+        b'{"v":1,"t":"str","d":1,"p":""}',
+        b'{"v":2,"t":"str","d":"x","p":""}',
+        b'{"v":1,"t":"unknown","d":"x","p":""}',
+        b'{"v":1,"t":"str","d":"x","p":"","extra":1}',
+        b'{"v":1,"t":"int","d":"1","p":""}',
+        b'{"v":1,"t":"int","d":true,"p":""}',
+        b'{"v":1,"t":"bool","d":1,"p":""}',
+        b'{"v":1,"t":"date","d":"nope","p":""}',
+        b'{"v":1,"t":"bytes","d":"!!","p":""}',
+        b'{"v":1,"t":"float","d":NaN,"p":""}',
         b"\xff\xfe",
     ],
 )
@@ -229,7 +240,7 @@ def test_authentic_but_invalid_payload_is_rejected(payload: bytes) -> None:
 
 
 def test_forged_well_formed_payload_is_accepted_only_with_the_key() -> None:
-    payload = json.dumps({"v": 1, "t": "str", "d": "ok"}, separators=(",", ":")).encode()
+    payload = json.dumps({"v": 1, "t": "str", "d": "ok", "p": ""}, separators=(",", ":")).encode()
     assert TokenCodec("srv", KEY).decrypt(_forge("srv", payload)) == "ok"
 
 
@@ -328,7 +339,7 @@ def test_issue_time_is_whole_seconds_in_the_padded_payload() -> None:
     codec = TokenCodec("srv", KEY, ttl_seconds=60, clock=_Clock(1234.9))
     token = codec.encrypt("x")
     raw = base64.urlsafe_b64decode(token[len("pii:v1:") :] + "==")
-    document = json.loads(AESGCM(KEY).decrypt(raw[:12], raw[12:], b"pii:v1\x00srv"))
+    document = json.loads(AESGCM(KEY).decrypt(raw[:12], raw[12:], b"pii:v1\x00srv\x00srv"))
 
     assert document["i"] == 1234
     assert set(document) == {"v", "t", "d", "i", "p"}

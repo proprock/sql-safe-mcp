@@ -109,9 +109,9 @@ def test_rows_must_match_the_output_plan_width() -> None:
 
 
 def _forge(payload: dict[str, Any] | bytes) -> str:
-    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    body = payload if isinstance(payload, bytes) else json.dumps({**payload, "p": ""}).encode()
     nonce = bytes(12)
-    sealed = AESGCM(KEY).encrypt(nonce, body, b"pii:v1\x00srv")
+    sealed = AESGCM(KEY).encrypt(nonce, body, b"pii:v1\x00srv\x00srv")
     return "pii:v1:" + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
 
 

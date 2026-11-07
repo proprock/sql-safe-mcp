@@ -27,7 +27,7 @@ _PAD_FIELD_BYTES = len(b',"p":""')
 _PADDED_KEYS = {"v", "t", "d", "p"}
 # Tokens issued while a TTL is configured also carry "i", the issue time in whole Unix seconds.
 _TIMED_KEYS = {"v", "t", "d", "i", "p"}
-_KEY_SETS = ({"v", "t", "d"}, _PADDED_KEYS, _TIMED_KEYS)
+_KEY_SETS = (_PADDED_KEYS, _TIMED_KEYS)
 
 
 def _invalid_token() -> DomainError:
@@ -136,11 +136,8 @@ class TokenCodec:
         self._clock = clock
 
     def _aad(self, domain: str | None) -> bytes:
-        # The default domain is the alias itself and keeps the pre-domain AAD, so existing tokens
-        # stay valid.
-        if domain is None or domain == self._alias:
-            return f"pii:v1\x00{self._alias}".encode()
-        return f"pii:v1\x00{self._alias}\x00{domain}".encode()
+        # The default domain is the alias itself.
+        return f"pii:v1\x00{self._alias}\x00{self._alias if domain is None else domain}".encode()
 
     def __repr__(self) -> str:
         return f"TokenCodec(alias={self._alias!r})"
@@ -209,7 +206,7 @@ class TokenCodec:
             "i" not in document or int(self._clock()) - issued > self._ttl
         ):
             raise ValueError
-        padding = document.get("p", "")
+        padding = document["p"]
         if type(padding) is not str or padding.strip("0"):
             raise ValueError
         version = document["v"]
