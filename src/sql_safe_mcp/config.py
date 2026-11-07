@@ -428,8 +428,11 @@ def _check_key_file_owner(alias: object, info: os.stat_result) -> None:
 def _read_key_file(alias: object, path: Path) -> str:
     """Read a base64 key file; permissions are checked on the opened descriptor."""
     try:
-        # O_NONBLOCK keeps a FIFO from blocking startup; it is rejected as non-regular below.
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        if sys.platform == "win32":
+            descriptor = os.open(path, os.O_RDONLY)
+        else:
+            # O_NONBLOCK keeps a FIFO from blocking startup; it is rejected as non-regular below.
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         try:
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
@@ -480,7 +483,8 @@ def load_config(path: str | Path, environ: Mapping[str, str] | None = None) -> A
             # Child processes (ODBC drivers, shells) must not inherit the keys.
             for server in config.servers.values():
                 if server.pii_key_env is not None:
-                    os.environ.pop(server.pii_key_env, None)
+                    # Present: loading read it, and aliases cannot share a key variable.
+                    del os.environ[server.pii_key_env]
         return config
     except ValidationError as exc:
         raise DomainError(

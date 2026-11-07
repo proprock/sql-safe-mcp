@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,42 @@ def test_bad_key_file_content_is_rejected_without_echoing_it(
     error = _error(path)
 
     assert error == f"[CONFIG_ERROR] Invalid configuration: {message}"
+
+
+def test_key_file_of_exactly_the_size_limit_is_read(tmp_path: Path) -> None:
+    key_file = _key_file(tmp_path / "app.key", "A" * 1024)
+    path = _config(tmp_path, f"    pii_key_file: '{key_file}'\n")
+
+    assert _error(path).endswith("PII key for server 'app' must decode to 32 bytes")
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("''", "String should have at least 1 character"), ("5", "Input should be a valid string")],
+    ids=["empty", "number"],
+)
+def test_key_file_setting_must_be_a_non_empty_string(
+    tmp_path: Path, value: str, message: str
+) -> None:
+    path = _config(tmp_path, f"    pii_key_file: {value}\n")
+
+    assert f"servers.app.pii_key_file: {message}" in _error(path)
+
+
+@_POSIX_ONLY
+def test_fifo_key_file_is_rejected_without_blocking(tmp_path: Path) -> None:
+    assert sys.platform != "win32"  # narrows the platform for the type checker
+    fifo = tmp_path / "app.key"
+    os.mkfifo(fifo, 0o600)
+    path = _config(tmp_path, f"    pii_key_file: '{fifo}'\n")
+    outcome: list[str] = []
+    worker = threading.Thread(target=lambda: outcome.append(_error(path)), daemon=True)
+
+    worker.start()
+    worker.join(timeout=5)
+
+    assert outcome, "opening a FIFO key file blocked"
+    assert outcome[0].endswith("PII key file for server 'app' is not a regular file")
 
 
 def test_missing_key_file_is_a_config_error_without_its_path(tmp_path: Path) -> None:
