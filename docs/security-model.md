@@ -97,7 +97,8 @@ member of `security/reasons.py`, `reject()` refuses anything else, and tests pin
 - Keep connection URLs and PII keys in the host's own configuration or environment. Never commit
   them or a `.env` file, and rotate a credential or key at once if it is exposed.
 - Give every `all_pii_safe` alias its own key. Rotating a key or renaming an alias invalidates its
-  existing tokens.
+  existing tokens, so rotate between work sessions with a server restart.
+- Set `runtime.token_ttl_seconds` to bound how long a leaked token stays usable.
 - Use a local, disposable, or explicitly non-production database for development and testing, never
   stored production credentials or data, and never commit raw database captures; see
   [CONTRIBUTING.md](../CONTRIBUTING.md).

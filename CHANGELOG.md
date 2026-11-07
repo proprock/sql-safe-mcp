@@ -21,6 +21,9 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - `pii.mode: deny-by-default` protects every column not listed in `pii.exposed_columns`, and
   `pii.deny` rejects any reference to a column with `QUERY_REJECTED` ("a denied column cannot be
   referenced"). Existing configurations are unchanged. See `docs/configuration.md`.
+- `runtime.token_ttl_seconds` (off by default) rejects tokens older than the limit with
+  `INVALID_PII_TOKEN`. Enabling it also rejects tokens issued before it was set. The token format
+  stays `pii:v1:`.
 
 ### Security
 

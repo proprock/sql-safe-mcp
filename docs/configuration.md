@@ -213,6 +213,14 @@ they cannot cross aliases even if keys are duplicated outside normal config load
 or renaming an alias will invalidate existing tokens. `metadata` and `meta_and_code` servers must
 not set `pii_key_env` or `pii`.
 
+### Token lifetime
+
+`runtime.token_ttl_seconds` is off by default: a token stays valid until its key changes. When
+set, each new token records its issue time in whole seconds inside the encrypted payload, and a
+token older than the limit is rejected as `INVALID_PII_TOKEN`. A token issued before the limit was
+set has no issue time and is rejected too, so enabling a TTL invalidates existing tokens. Turning
+the TTL off again accepts every token sealed with the current key.
+
 ### PII rules
 
 Each `pii.rules` entry protects columns of tables selected by one table pattern:
@@ -433,6 +441,7 @@ Optional, under `runtime:`. A value outside its range is a startup error.
 | `pool_timeout_seconds` | 10 | 1-300 |
 | `statement_timeout_seconds` | 30 | 1-3600 |
 | `max_definition_chars` | 262144 | 1024-10000000 |
+| `token_ttl_seconds` | none (tokens do not expire) | 1-315360000; see [Token lifetime](#token-lifetime) |
 | `default_max_rows` | 200 | 1-100000, at most `hard_max_rows` |
 | `hard_max_rows` | 1000 | 1-100000 |
 | `max_sql_chars` | 65536 | 256-1000000 |
