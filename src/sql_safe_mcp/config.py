@@ -32,6 +32,9 @@ class RuntimeConfig(BaseModel):
     pool_timeout_seconds: int = Field(default=10, ge=1, le=300)
     statement_timeout_seconds: int = Field(default=30, ge=1, le=3600)
     max_definition_chars: int = Field(default=262_144, ge=1024, le=10_000_000)
+    # None keeps tokens valid until the key changes; otherwise a token expires this many whole
+    # seconds after it was issued.
+    token_ttl_seconds: int | None = Field(default=None, ge=1, le=315_360_000, strict=True)
     default_max_rows: int = Field(default=200, ge=1, le=100_000)
     hard_max_rows: int = Field(default=1000, ge=1, le=100_000)
     max_sql_chars: int = Field(default=65_536, ge=256, le=1_000_000)

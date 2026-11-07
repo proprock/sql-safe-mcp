@@ -1003,3 +1003,31 @@ def test_shared_rule_sets_carry_deny_and_exposed_columns(tmp_path: Path) -> None
     assert pii.mode == "deny-by-default"
     assert [rule.table for rule in pii.deny] == ["*", "Attachments", "Secrets"]
     assert [rule.table for rule in pii.exposed_columns] == ["Visits"]
+
+
+def _ttl_config(runtime: str = "") -> str:
+    return (
+        f"version: 1\n{runtime}servers:\n"
+        "  one:\n"
+        "    engine: sqlserver\n"
+        "    access_level: all_pii_safe\n"
+        "    connection_url: mssql+pyodbc://u:p@one/master?driver=x\n"
+        "    pii_key_env: KEY_ONE\n"
+        '    pii: {rules: [{database: "*", schema: dbo, table: Users, columns: [Email]}]}\n'
+    )
+
+
+def test_token_ttl_is_off_by_default_and_bounded(tmp_path: Path) -> None:
+    env = {"KEY_ONE": _key(1)}
+    default = load_config(_write(tmp_path, _ttl_config()), env)
+    set_ttl = load_config(
+        _write(tmp_path, _ttl_config("runtime: {token_ttl_seconds: 86400}\n")), env
+    )
+
+    assert default.runtime.token_ttl_seconds is None
+    assert set_ttl.runtime.token_ttl_seconds == 86400
+    for bad in (0, -1, 315_360_001, "true"):
+        text = _ttl_config(f"runtime: {{token_ttl_seconds: {bad}}}\n")
+        with pytest.raises(DomainError) as raised:
+            load_config(_write(tmp_path, text), env)
+        assert "token_ttl_seconds" in raised.value.public_message
