@@ -7,6 +7,14 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+### Changed
+
+- `sql-safe-mcp --verify-pii-rules` warns about more unprotected column names that look personal:
+  `fax`, `account`, `acct`, `license`, `licence`, `biometric`, `fingerprint`, `insurance`,
+  `policy`, `member`, `street`, `county`, `admission`, `admit`, `discharg`, `death`, and
+  `deceased`. These are hints only and never change the exit code. The full list is in
+  `docs/configuration.md`.
+
 ### Security
 
 - Every log line that names the `database` argument (`connect ok`, `connect failed`,

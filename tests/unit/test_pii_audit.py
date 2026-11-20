@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
 from sql_safe_mcp.config import AppConfig
 from sql_safe_mcp.pii_audit import Catalog, _database_names, audit_server
 
@@ -103,3 +105,80 @@ def test_databases_of_exposed_and_deny_entries_are_reflected() -> None:
     assert pii is not None
 
     assert _database_names([*pii.rules, *pii.exposed_columns, *pii.deny]) == ({"a"}, True)
+
+
+SAFE_HARBOR_COLUMNS = [
+    ("fax", "fax_number"),
+    ("account", "account_no"),
+    ("acct", "acct_id"),
+    ("license", "license_no"),
+    ("licence", "licence_no"),
+    ("biometric", "biometric_id"),
+    ("fingerprint", "fingerprint_hash"),
+    ("insurance", "insurance_id"),
+    ("policy", "policy_no"),
+    ("member", "member_id"),
+    ("street", "street_line"),
+    ("county", "county_code"),
+    ("admission", "admission_code"),
+    ("admit", "admit_flag"),
+    ("discharg", "discharge_code"),
+    ("death", "death_code"),
+    ("deceased", "deceased_flag"),
+]
+
+
+def _audit_columns(pii: dict[str, object], column: str) -> tuple[str, int, int]:
+    catalog: Catalog = {"clinic": [(None, "t", ("id", column))]}
+    report = audit_server("clinic", _server(pii).servers["clinic"], catalog)
+    return "\n".join(report.lines), report.unmatched_rules, report.errors
+
+
+@pytest.mark.parametrize(("fragment", "column"), SAFE_HARBOR_COLUMNS, ids=lambda v: v)
+def test_safe_harbor_fragment_warns_for_an_unprotected_column(fragment: str, column: str) -> None:
+    # A rule on another column keeps the config valid while the checked column stays unprotected.
+    pii: dict[str, object] = {"rules": [{"database": "clinic", "table": "t", "columns": ["id"]}]}
+
+    text, unmatched, errors = _audit_columns(pii, column)
+
+    assert f"unprotected column looks personal: clinic.t.{column}" in text
+    # A warning never changes the exit path: no unmatched rules and no errors.
+    assert (unmatched, errors) == (0, 0)
+
+
+@pytest.mark.parametrize(("fragment", "column"), SAFE_HARBOR_COLUMNS, ids=lambda v: v)
+def test_safe_harbor_fragment_is_silent_for_a_protected_column(fragment: str, column: str) -> None:
+    pii: dict[str, object] = {"rules": [{"database": "clinic", "table": "t", "columns": [column]}]}
+
+    text, unmatched, errors = _audit_columns(pii, column)
+
+    assert "looks personal" not in text
+    assert (unmatched, errors) == (0, 0)
+
+
+# Ordinary names that the advisory must stay quiet about. Each one contains a fragment that a
+# bare-substring match would turn into noise (date, vin, url, city, plate, age).
+BENIGN_COLUMNS = [
+    "updated_at",
+    "UpdateDate",
+    "created_date",
+    "validated",
+    "template_id",
+    "hourly_rate",
+    "capacity",
+    "savings",
+    "driving_score",
+    "province",
+    "page",
+    "message",
+    "image",
+]
+
+
+@pytest.mark.parametrize("column", BENIGN_COLUMNS)
+def test_ordinary_column_names_do_not_look_personal(column: str) -> None:
+    pii: dict[str, object] = {"rules": [{"database": "clinic", "table": "t", "columns": ["id"]}]}
+
+    text, _, _ = _audit_columns(pii, column)
+
+    assert "looks personal" not in text
