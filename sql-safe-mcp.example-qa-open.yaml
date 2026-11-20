@@ -1,0 +1,23 @@
+# Open QA alias for exploring de-identified data. Run it as a second server process beside the
+# strict server (sql-safe-mcp.example-strict.yaml); it does not repeat that file's policy.
+# Do not deploy this file where production data is reachable: it lets an agent see every column
+# except the free-text columns in `deny`.
+# `version` is required and its only accepted value is 1.
+version: 1
+
+servers:
+  qa_open:
+    # Use a separate key from the strict server; QA_OPEN_PII_KEY is never shared with `main`.
+    engine: sqlserver
+    access_level: all_pii_safe
+    # A whole-value placeholder: QA_OPEN_SQL_URL holds the complete QA mssql+pyodbc URL.
+    # If the QA server uses a self-signed certificate, add `require_tls: false` to this alias.
+    connection_url: "${QA_OPEN_SQL_URL}"
+    pii_key_env: QA_OPEN_PII_KEY
+    pii:
+      # `protect` leaves every column readable except the `deny` entries below.
+      mode: protect
+      # `deny` columns stay unreachable even as tokens. Only free text is denied here.
+      deny:
+        - table: "*"
+          columns: [Notes, Comments]

@@ -1,0 +1,50 @@
+# Strict policy: the one PII policy used unchanged in QA and in production.
+# Only the environment differs: MAIN_SQL_URL names the right database, and each environment mounts
+# its own key as a secret at the same path, /run/secrets/main_pii_key, so this file never changes.
+# The alias `main` stays the same in every environment, so prompts and agent scenarios do not change.
+# Run this file in QA to accept a scenario before it goes to production.
+# `version` is required and its only accepted value is 1.
+version: 1
+
+runtime:
+  # Optional. Use 3600 (one hour) or another value for tokens that expire; omit for no expiry.
+  token_ttl_seconds: 3600 # 1-315360000
+  # Optional. Counts below this value are suppressed. 11 is a common small-cell threshold.
+  min_count_cell: 11 # 0-1000
+  # Optional. Rows returned to the caller are capped at this value.
+  hard_max_rows: 1000 # 1-100000
+
+logging:
+  # Optional. Writes one audit line per execute_sql call to stderr; see the Audit log section.
+  audit: true
+
+# Shared group applied to the main alias through pii.include. Keep the whole policy here.
+pii_rules:
+  - name: app_policy
+    # `exposed_columns` lists the only columns the agent may see. Without `database`, the
+    # entry applies to every database on the alias.
+    exposed_columns:
+      - table: Orders
+        columns: [OrderId, OrderDate, Status, Total]
+      - table: Customers
+        columns: [CustomerId, Segment, City]
+    # `deny` lists columns that stay unreachable even as tokens. Use it for free text.
+    deny:
+      - table: Orders
+        columns: [Notes]
+      - table: Customers
+        columns: [Comments]
+
+servers:
+  main:
+    # The same alias in QA and production. Connection and key come from environment variables.
+    engine: sqlserver
+    access_level: all_pii_safe
+    # A whole-value placeholder: MAIN_SQL_URL holds the complete mssql+pyodbc URL with Encrypt=yes.
+    connection_url: "${MAIN_SQL_URL}"
+    # A secret file holding one base64-encoded 32-byte key, readable by the server user only.
+    pii_key_file: /run/secrets/main_pii_key
+    pii:
+      # `deny-by-default` protects every column that the exposed_columns above do not list.
+      mode: deny-by-default
+      include: [app_policy]

@@ -99,7 +99,8 @@ Two points often missed:
       what the job needs and carries column-level `DENY` on free-text columns.
 - [ ] `access_level: all_pii_safe` only where `execute_sql` is needed. Such an alias also reads
       stored procedure source (finding F-09), so review procedure bodies for literal identifiers.
-- [ ] `pii.mode: deny-by-default`, with `exposed_columns` limited to non-identifying columns.
+- [ ] `pii.mode: deny-by-default`, with `exposed_columns` limited to non-identifying columns
+      (the [strict template](../sql-safe-mcp.example-strict.yaml) shows the shape).
 - [ ] `pii.deny` for free text, attachments, and photos.
 - [ ] `pii.rules` with one `domain` per entity (patient, guardian, clinical).
 - [ ] Dates of birth, ZIP codes, schools, and guardian names protected like names.
