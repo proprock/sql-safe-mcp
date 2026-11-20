@@ -77,6 +77,8 @@ source = ["sql_safe_mcp"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Git worktrees live under .claude/ and hold other branches' code; never lint or format them.
+extend-exclude = [".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
