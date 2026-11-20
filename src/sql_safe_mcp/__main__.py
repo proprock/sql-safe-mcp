@@ -11,6 +11,7 @@ from sql_safe_mcp.config import load_config
 from sql_safe_mcp.errors import DomainError
 from sql_safe_mcp.mcp_server import create_server
 from sql_safe_mcp.pii_audit import collect_catalog, verify_pii_rules
+from sql_safe_mcp.pii_scaffold import collect_scaffold_catalog, scaffold_pii
 
 
 def _positive_int(value: str) -> int:
@@ -47,10 +48,21 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Connect to each all_pii_safe alias and report PII rules that match nothing.",
     )
+    actions.add_argument(
+        "--scaffold-pii",
+        metavar="ALIAS",
+        help="Reflect an all_pii_safe alias and print a draft pii section (deny-by-default).",
+    )
     parser.add_argument(
         "--strict",
         action="store_true",
         help="With --verify-pii-rules, exit 2 when any rule matches nothing.",
+    )
+    parser.add_argument(
+        "--database",
+        action="append",
+        metavar="NAME",
+        help="With --scaffold-pii, reflect only this database (repeatable); default: all visible.",
     )
     return parser
 
@@ -60,6 +72,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.strict and not args.verify_pii_rules:
         parser.error("--strict requires --verify-pii-rules")
+    if args.database and args.scaffold_pii is None:
+        parser.error("--database requires --scaffold-pii")
     if args.gen_pii_key is not None:
         for _ in range(args.gen_pii_key):
             print(base64.b64encode(secrets.token_bytes(32)).decode("ascii"))
@@ -77,6 +91,15 @@ def main() -> None:
         print("\n".join(report.lines), file=sys.stderr)
         if report.errors or (args.strict and report.unmatched_rules):
             raise SystemExit(2)
+        return
+    if args.scaffold_pii is not None:
+        result = scaffold_pii(
+            config, args.scaffold_pii, args.database or (), collect_scaffold_catalog
+        )
+        print("\n".join(result.diagnostics), file=sys.stderr)
+        if result.failed or result.text is None:
+            raise SystemExit(2)
+        sys.stdout.write(result.text)
         return
     create_server(config).run("stdio")
 

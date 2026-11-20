@@ -7,6 +7,16 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+### Added
+
+- `sql-safe-mcp --scaffold-pii ALIAS [--database NAME]...` reflects an `all_pii_safe` alias (every
+  visible database, or the named ones) and prints a draft `deny-by-default` section to stdout:
+  `exposed_columns` for the remaining numeric and boolean columns, `deny` for binary and free-text
+  columns, and review comments for key columns, columns found in only some databases, and columns
+  that existing rules already cover. The draft is a suggestion to review, and its entries apply to
+  every database of the alias. Exit 2 for an unknown or non-`all_pii_safe` alias, a connection
+  error, or no tables. See `docs/configuration.md`.
+
 ### Changed
 
 - **Release note:** a server whose `engine` does not match the real server now fails with

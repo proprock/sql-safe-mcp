@@ -151,6 +151,49 @@ are checked, and denied columns never are): `email`, `phone`, `mobile`, `ssn`, `
 harmless ones, and never changes the exit code. It is a hint, not a guarantee that no personal
 data is exposed.
 
+## Drafting a deny-by-default section
+
+Writing `exposed_columns` and `deny` by hand for 150 tables is slow. For an `all_pii_safe` alias,
+the command reflects the schema and prints a draft to stdout:
+
+```bash
+sql-safe-mcp --scaffold-pii main > draft.yaml
+sql-safe-mcp --scaffold-pii main --database Crm --database Billing > draft.yaml
+```
+
+`--database` is repeatable. Without it, every visible database is reflected, which is slow when
+there are many; databases with the same schema collapse into one entry, so a few representative
+databases are enough. Entries carry no `database`, so they apply to **every** database of the
+alias, including those that were not reflected: the header of the draft says so and lists the
+reflected ones. Only names and types are read, never rows, and only names are printed.
+
+**The draft is a suggestion, not a decision.** Review every line before pasting it under `pii:`
+(it is a fragment: `mode`, `exposed_columns`, `deny`, followed by review comments). Columns that
+`pii.rules` or `pii.deny` already cover are never offered and are listed in a comment. Each
+column is classified by a fixed, conservative rule, first match wins:
+
+1. **Deny** (`deny`): a binary column, or a name containing `note`, `comment`, `memo`, `attach`,
+   or `photo`.
+2. **Stays a token** (counted in the summary, not listed): a name containing a fragment from the
+   [list above](#verifying-pii-rules-against-the-real-schema), or a column of type string, date,
+   datetime, time, uuid, or other.
+3. **Key** (a commented block): a primary-key column, or a name ending in `id`. Open one only if
+   the agent must join or sort by it. A key that names a person (patient, member, MRN) is a Safe
+   Harbor identifier (R); see [`health-data.md`](health-data.md).
+4. **Offer to open** (`exposed_columns`): the remaining integer, decimal, float, and bool columns.
+
+Tables are grouped by schema and name, ignoring case. A column is offered only if every reflected
+database that has the table has the column; a column found in only some is named in an
+`# only in` comment and stays a token. A table or column name that cannot be written as a rule
+(a `*` in a column or schema name, two columns that differ only by case) is named in a
+`# not listable` comment. Characters that act as patterns in a table name (`*`, `?`, `[`) are
+escaped, so an entry matches only its own table.
+
+Exit codes: 0 with a draft on stdout; 2 for an unknown alias, an alias that is not
+`all_pii_safe`, a configuration or connection error, a database the login cannot see, or no
+tables at all (usually a wrong database name or missing metadata permission). Check the pasted
+result with `--check-config` and `--verify-pii-rules --strict`.
+
 ## Top-level keys
 
 | Key | Meaning |

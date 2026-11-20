@@ -474,5 +474,27 @@ def test_deny_takes_priority_over_protection_rules() -> None:
     assert Reason.COLUMN_DENIED.value in info.value.public_message
 
 
+def test_deny_by_default_rule_wins_over_exposed_columns() -> None:
+    # `--scaffold-pii` relies on this: a column an existing rule covers is never offered, because
+    # listing it in exposed_columns would not open it.
+    config = PiiConfig(
+        mode="deny-by-default",
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        exposed_columns=[PiiScopeRule(table="Users", columns=["Email", "Name"])],
+    )
+    assert evaluate_deny("SELECT Email, Name FROM Users", config).protected == (True, False)
+
+
+def test_deny_by_default_deny_wins_over_exposed_columns() -> None:
+    config = PiiConfig(
+        mode="deny-by-default",
+        exposed_columns=[PiiScopeRule(table="Users", columns=["Phone"])],
+        deny=[PiiScopeRule(table="Users", columns=["Phone"])],
+    )
+    with pytest.raises(DomainError) as info:
+        evaluate_deny("SELECT Phone FROM Users", config)
+    assert Reason.COLUMN_DENIED.value in info.value.public_message
+
+
 def test_count_star_does_not_reference_denied_columns() -> None:
     assert evaluate_deny("SELECT COUNT(*) FROM Contacts").protected == (False,)

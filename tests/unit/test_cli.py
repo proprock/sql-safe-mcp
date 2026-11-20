@@ -4,12 +4,16 @@ import base64
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+import yaml
 
 import sql_safe_mcp.__main__ as cli
+from sql_safe_mcp.config import PiiConfig
 from sql_safe_mcp.pii_audit import Catalog, CatalogError
+from sql_safe_mcp.pii_scaffold import ScaffoldCatalog, ScaffoldColumn
 
 
 def _write_config(path: Path, *, extra: str = "") -> Path:
@@ -248,3 +252,170 @@ def test_strict_requires_verify_pii_rules() -> None:
 
     assert result.returncode == 2
     assert "--strict requires --verify-pii-rules" in result.stderr
+
+
+# --- --scaffold-pii ---------------------------------------------------------------------------
+
+_SCAFFOLD_CATALOG = ScaffoldCatalog(
+    databases={
+        "clinic": [
+            (
+                None,
+                "patients",
+                (
+                    ScaffoldColumn("id", "integer", True),
+                    ScaffoldColumn("email", "string", False),
+                    ScaffoldColumn("visits", "integer", False),
+                ),
+            )
+        ]
+    },
+    visible=1,
+)
+
+
+def _run_scaffold(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    *arguments: str,
+    collect: object = None,
+    config_text: str | None = None,
+) -> tuple[int, str, str, list[tuple[str, tuple[str, ...]]]]:
+    config = tmp_path / "pii.yaml"
+    config.write_text(config_text or _PII_CONFIG.format(column="email"), encoding="utf-8")
+    monkeypatch.setenv("CLINIC_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def default(_config: object, alias: str, databases: Sequence[str]) -> ScaffoldCatalog:
+        calls.append((alias, tuple(databases)))
+        return _SCAFFOLD_CATALOG
+
+    monkeypatch.setattr(cli, "collect_scaffold_catalog", collect or default)
+    monkeypatch.setattr(sys, "argv", ["sql_safe_mcp", "--config", str(config), *arguments])
+    code = 0
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        code = int(exit_.code or 0)
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err, calls
+
+
+def test_scaffold_pii_prints_a_valid_draft_to_stdout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, out, err, calls = _run_scaffold(monkeypatch, capsys, tmp_path, "--scaffold-pii", "clinic")
+
+    assert code == 0
+    assert calls == [("clinic", ())]
+    draft = yaml.safe_load(out)
+    PiiConfig.model_validate(draft)
+    assert draft["exposed_columns"] == [{"table": "patients", "columns": ["visits"]}]
+    assert "Reflected 1 database(s), 1 table(s)." in err
+    assert "cli-pass-marker" not in out + err
+
+
+def test_scaffold_pii_passes_every_database_option(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, _, _, calls = _run_scaffold(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--scaffold-pii",
+        "clinic",
+        "--database",
+        "b",
+        "--database",
+        "a",
+    )
+
+    assert code == 0
+    assert calls == [("clinic", ("b", "a"))]
+
+
+def test_scaffold_pii_unknown_alias_exits_two(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, out, err, calls = _run_scaffold(
+        monkeypatch, capsys, tmp_path, "--scaffold-pii", "nope\nERROR: forged"
+    )
+
+    assert code == 2
+    assert out == ""
+    assert "ERROR: unknown server alias 'nope?ERROR??forged'" in err
+    assert calls == []
+
+
+def test_scaffold_pii_metadata_alias_exits_two(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    metadata = """
+version: 1
+servers:
+  plain:
+    engine: mysql
+    access_level: metadata
+    connection_url: mysql+pymysql://user:cli-pass-marker@host/clinic?ssl_ca=/ca.pem
+"""
+    code, out, err, calls = _run_scaffold(
+        monkeypatch, capsys, tmp_path, "--scaffold-pii", "plain", config_text=metadata
+    )
+
+    assert code == 2
+    assert out == ""
+    assert "ERROR: plain: access_level is metadata" in err
+    assert calls == []
+
+
+def test_scaffold_pii_connection_failure_exits_two_without_secret(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    def fail(_config: object, _alias: str, _databases: object) -> object:
+        raise CatalogError("cannot reflect database 'clinic': OperationalError code=2003")
+
+    code, out, err, _ = _run_scaffold(
+        monkeypatch, capsys, tmp_path, "--scaffold-pii", "clinic", collect=fail
+    )
+
+    assert code == 2
+    assert out == ""
+    assert "ERROR: clinic: cannot reflect database" in err
+    assert "cli-pass-marker" not in err
+
+
+def test_scaffold_pii_with_no_tables_exits_two_not_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    def empty(_config: object, _alias: str, _databases: object) -> ScaffoldCatalog:
+        return ScaffoldCatalog(databases={"clinic": []}, visible=1)
+
+    code, out, err, _ = _run_scaffold(
+        monkeypatch, capsys, tmp_path, "--scaffold-pii", "clinic", collect=empty
+    )
+
+    assert code == 2
+    assert out == ""
+    assert "no tables reflected; check the database names and the login's metadata" in err
+
+
+def test_database_requires_scaffold_pii() -> None:
+    result = _run("--database", "x")
+
+    assert result.returncode == 2
+    assert "--database requires --scaffold-pii" in result.stderr
+
+
+def test_strict_is_rejected_with_scaffold_pii() -> None:
+    result = _run("--scaffold-pii", "clinic", "--strict")
+
+    assert result.returncode == 2
+    assert "--strict requires --verify-pii-rules" in result.stderr
+
+
+def test_scaffold_pii_is_exclusive_with_the_other_actions() -> None:
+    result = _run("--scaffold-pii", "clinic", "--verify-pii-rules")
+
+    assert result.returncode == 2
+    assert "not allowed with argument" in result.stderr
