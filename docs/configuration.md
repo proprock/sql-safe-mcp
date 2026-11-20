@@ -516,10 +516,16 @@ logging:
 A failed connection or operation logs the driver error class, the SQLSTATE or numeric code, and the
 driver message. The connection URL's user name and password are replaced with `***` and its host with the
 server alias in that message. Quoted literals (`'…'`, `N'…'`, `"…"`) become `'***'`, digit runs of six or
-more become `***`, control characters are replaced, and long messages are truncated. A failed `execute_sql`
+more become `***`, control characters and Unicode line separators are replaced, and long messages are truncated. A failed `execute_sql`
 logs only the class and the code, never the message, because drivers echo the offending value. A `TIMEOUT` or
 `CONNECTION_FAILED` error shown to the caller carries a `Reference`; the same value appears as
 `reference=` on the matching log line.
+
+The `database` shown on every log line (`connect ok`, `connect failed`, `engine created`,
+`engine evicted`, `operation ok`, `operation failed`, and the audit line) comes from the caller, so it
+is written as one field: any character other than a letter, digit, `_`, `.`, `$`, `#`, `@`, or `-`
+becomes `?`, and a missing database shows `-`. A line break in the argument therefore cannot forge a
+second log line, such as a fake `audit` entry.
 
 Reading a failure: `connect failed ... elapsed_ms=` near the login timeout points at reaching or
 logging in to the server, while `operation failed` after a `connect ok` points at the query itself.

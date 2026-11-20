@@ -8,9 +8,18 @@ from urllib.parse import quote
 from sqlalchemy.engine import make_url
 
 _MAX_MESSAGE_CHARS = 500
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]+")
+# C0 and C1 controls (NEL is \x85) plus the Unicode line and paragraph separators.
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 _QUOTED_LITERAL = re.compile(r"""(['"])(?:(?!\1).)*\1""", re.DOTALL)
 _LONG_DIGITS = re.compile(r"\d{6,}")
+_LOG_FIELD_UNSAFE = re.compile(r"[^\w.$#@-]")
+
+
+def log_field(value: str | None) -> str:
+    """Keep a caller- or metadata-supplied name on one field of a log line.
+
+    ``None`` and the empty string are ``-``, so the field is never empty."""
+    return _LOG_FIELD_UNSAFE.sub("?", value) if value else "-"
 
 
 def configure_logging(level: str, audit: bool = False) -> None:

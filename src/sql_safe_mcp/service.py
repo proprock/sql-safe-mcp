@@ -16,7 +16,7 @@ from sql_safe_mcp.db.extras import extras_for
 from sql_safe_mcp.db.reflection import get_table_definition as reflect_table_definition
 from sql_safe_mcp.db.reflection import list_tables as reflect_tables
 from sql_safe_mcp.db.registry import EngineRegistry
-from sql_safe_mcp.diagnostics import describe_error, secrets_for
+from sql_safe_mcp.diagnostics import describe_error, log_field, secrets_for
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.models import (
     ColumnSource,
@@ -127,11 +127,6 @@ def _audited(caller_database: str, issued: ValidatedQuery | None) -> str:
     return caller_database if issued is None else issued.database
 
 
-def _audit_name(value: str) -> str:
-    """Keep a caller- or metadata-supplied name on one field of the audit line."""
-    return re.sub(r"[^\w.$#@-]", "?", value)
-
-
 def _audit_objects(query: ValidatedQuery | None) -> str:
     if query is None:
         return "tables=- columns=- protected=-"
@@ -145,8 +140,8 @@ def _audit_objects(query: ValidatedQuery | None) -> str:
     tables.update(column.rsplit(".", 1)[0] for column in columns)
     protected = sum(plan.protected for plan in query.outputs)
     return (
-        f"tables={','.join(sorted(map(_audit_name, tables))) or '-'} "
-        f"columns={','.join(sorted(map(_audit_name, columns))) or '-'} protected={protected}"
+        f"tables={','.join(sorted(map(log_field, tables))) or '-'} "
+        f"columns={','.join(sorted(map(log_field, columns))) or '-'} protected={protected}"
     )
 
 
@@ -199,7 +194,7 @@ class DatabaseService:
         logger.warning(
             "operation failed server=%s database=%s operation=%s code=%s reference=%s error=%s",
             alias,
-            database or "-",
+            log_field(database),
             operation,
             error.code,
             error.correlation_id or "-",
@@ -216,7 +211,7 @@ class DatabaseService:
             "%s; server=%s database=%s operation=%s error_class=%s reference=%s",
             message,
             alias,
-            database or "-",
+            log_field(database),
             operation,
             type(cause).__name__,
             error.correlation_id,
@@ -255,7 +250,7 @@ class DatabaseService:
         logger.info(
             "operation ok server=%s database=%s operation=%s elapsed_ms=%d",
             alias,
-            database or "-",
+            log_field(database),
             operation_name,
             (time.perf_counter() - started) * 1000,
         )
@@ -497,8 +492,8 @@ class DatabaseService:
         )
         audit_logger.info(
             "audit server=%s database=%s %s %s elapsed_ms=%d reference=%s",
-            _audit_name(alias),
-            _audit_name(database),
+            log_field(alias),
+            log_field(database),
             _audit_objects(query),
             outcome,
             (time.perf_counter() - started) * 1000,

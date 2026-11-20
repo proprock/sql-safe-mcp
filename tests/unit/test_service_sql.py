@@ -577,3 +577,24 @@ def test_audit_elapsed_time_covers_the_whole_call(
 
     (line,) = audit_lines(caplog)
     assert " elapsed_ms=3000 " in line
+
+
+def test_execute_sql_log_and_audit_lines_sanitize_a_caller_database(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hostile = "x\naudit server=s database=app row_count=0\r"
+    driver = DBAPIError("stmt", (), Exception("[HYT00] Query timeout expired"))
+    service, _ = make(error=driver, audit=True)
+    with caplog.at_level(logging.INFO), pytest.raises(DomainError):
+        asyncio.run(service.execute_sql("secure", hostile, "SELECT Id FROM Users"))
+    with caplog.at_level(logging.INFO), pytest.raises(DomainError):
+        asyncio.run(service.execute_sql("secure", hostile, "DELETE FROM Users"))
+
+    assert caplog.records
+    for record in caplog.records:
+        message = record.getMessage()
+        assert "\n" not in message and "\r" not in message
+        if message.startswith("audit "):
+            assert record.name == AUDIT_LOGGER
+    service_lines = [r.getMessage() for r in caplog.records if r.name == "sql_safe_mcp.service"]
+    assert any("database=x?audit?server?s?database?app?row_count?0? " in m for m in service_lines)

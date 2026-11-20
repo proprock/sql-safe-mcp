@@ -18,7 +18,7 @@ from typing import Any, Literal, cast
 import pytest
 import sqlalchemy as sa
 from pydantic import SecretStr
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, InvalidRequestError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from sql_safe_mcp import service as service_module
@@ -390,8 +390,13 @@ def test_stored_procedure_tools_name_the_required_access_levels(world: World) ->
             "Database operation failed",
             "DBAPIError",
         ),
+        (
+            InvalidRequestError("secret"),
+            "SQLAlchemy operation failed",
+            "InvalidRequestError",
+        ),
     ],
-    ids=["unexpected", "unclassified-dbapi"],
+    ids=["unexpected", "unclassified-dbapi", "sqlalchemy"],
 )
 @pytest.mark.parametrize(
     ("call", "database"),
@@ -488,3 +493,64 @@ def test_reflected_catalog_reads_through_the_service_schema_cache(
 
     assert first == second == [("main", "Users")]
     assert columns == ["Id", "Email"]
+
+
+HOSTILE_DATABASE = "x\naudit server=s database=app row_count=0\r"
+SAFE_DATABASE = "database=x?audit?server?s?database?app?row_count?0?"
+
+_HOSTILE_CALLS: list[tuple[str, Callable[[DatabaseService], Any]]] = [
+    ("list_tables", lambda s: s.list_tables("alpha", HOSTILE_DATABASE)),
+    (
+        "get_table_definition",
+        lambda s: s.get_table_definition("alpha", HOSTILE_DATABASE, "Users"),
+    ),
+    ("list_stored_procedures", lambda s: s.list_stored_procedures("alpha", HOSTILE_DATABASE)),
+]
+_HOSTILE_FAILURES = {
+    "classified": DBAPIError("SELECT 1", None, Exception("HYT00", "x")),
+    "unclassified": ValueError("boom"),
+}
+
+
+def _service_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    assert [r for r in caplog.records if r.name == SERVICE_LOGGER]
+    return [r.getMessage() for r in caplog.records if r.name == SERVICE_LOGGER]
+
+
+def _assert_single_safe_lines(messages: list[str]) -> None:
+    for message in messages:
+        assert "\n" not in message and "\r" not in message
+        assert not message.startswith("audit ")
+    assert any(SAFE_DATABASE in message for message in messages)
+
+
+@pytest.mark.parametrize("failure", list(_HOSTILE_FAILURES.values()), ids=list(_HOSTILE_FAILURES))
+@pytest.mark.parametrize(("operation", "call"), _HOSTILE_CALLS, ids=[n for n, _ in _HOSTILE_CALLS])
+def test_failure_log_lines_sanitize_a_caller_database(
+    world: World,
+    caplog: pytest.LogCaptureFixture,
+    operation: str,
+    call: Callable[[DatabaseService], Any],
+    failure: BaseException,
+) -> None:
+    _failing(world, failure)
+
+    with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
+        _error(call(world.service))
+
+    _assert_single_safe_lines(_service_messages(caplog))
+
+
+@pytest.mark.parametrize(("operation", "call"), _HOSTILE_CALLS[::2], ids=["list_tables", "procs"])
+def test_operation_ok_log_line_sanitizes_a_caller_database(
+    world: World,
+    caplog: pytest.LogCaptureFixture,
+    operation: str,
+    call: Callable[[DatabaseService], Any],
+) -> None:
+    with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
+        asyncio.run(call(world.service))
+
+    messages = _service_messages(caplog)
+    assert [m.split(" server=")[0] for m in messages] == ["operation ok"]
+    _assert_single_safe_lines(messages)

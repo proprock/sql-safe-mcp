@@ -9,6 +9,14 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- Every log line that names the `database` argument (`connect ok`, `connect failed`,
+  `engine created`, `engine evicted`, `operation ok`, `operation failed`) now writes it as a single
+  sanitized field, as the audit line already did: characters other than letters, digits, `_`, `.`,
+  `$`, `#`, `@`, and `-` become `?`. Before, a line break in `database` produced a stderr line
+  indistinguishable from an `audit` entry.
+  The same applies to the driver message on `connect failed` and `operation failed` lines: C1
+  controls (such as NEL) and the Unicode line and paragraph separators are replaced like other
+  control characters, and an empty `database` shows `-`.
 - A `pii_key` entry written directly in a server's YAML block is now rejected with `CONFIG_ERROR`
   ("pii_key is not a configuration key; use pii_key_file or pii_key_env"). Before, such a key was
   silently accepted on `metadata` aliases and silently overwritten on aliases that also set

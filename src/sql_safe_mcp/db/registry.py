@@ -11,7 +11,7 @@ import anyio
 from sqlalchemy import Engine, create_engine, event
 
 from sql_safe_mcp.config import AppConfig
-from sql_safe_mcp.diagnostics import describe_error, secrets_for
+from sql_safe_mcp.diagnostics import describe_error, log_field, secrets_for
 from sql_safe_mcp.errors import DomainError, ErrorCode
 
 T = TypeVar("T")
@@ -63,7 +63,7 @@ class EngineRegistry:
                 logger.warning(
                     "connect failed server=%s database=%s elapsed_ms=%d error=%s",
                     alias,
-                    database or "-",
+                    log_field(database),
                     (time.perf_counter() - started) * 1000,
                     describe_error(exc, secrets),
                 )
@@ -71,7 +71,7 @@ class EngineRegistry:
             logger.info(
                 "connect ok server=%s database=%s elapsed_ms=%d",
                 alias,
-                database or "-",
+                log_field(database),
                 (time.perf_counter() - started) * 1000,
             )
             return connection
@@ -127,12 +127,14 @@ class EngineRegistry:
                 "engine created server=%s engine=%s database=%s",
                 alias,
                 self._config.servers[alias].engine,
-                database or "-",
+                log_field(database),
             )
             if len(self._engines) > self._config.runtime.engine_cache_size:
                 evicted_key, evicted = self._engines.popitem(last=False)
                 logger.debug(
-                    "engine evicted server=%s database=%s", evicted_key[0], evicted_key[1] or "-"
+                    "engine evicted server=%s database=%s",
+                    evicted_key[0],
+                    log_field(evicted_key[1]),
                 )
         if evicted is not None:
             evicted.dispose()
