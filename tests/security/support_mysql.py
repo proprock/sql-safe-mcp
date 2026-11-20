@@ -43,6 +43,9 @@ class MysqlCatalog:
         "canary": ["id"],
     }
 
+    def database_name(self) -> str:
+        return DATABASE
+
     def list_tables(self) -> list[tuple[str, str]]:
         return [("", name) for name in self.tables]
 
@@ -84,7 +87,6 @@ def validate_mysql(sql: str, max_rows: int = 200) -> ValidatedQuery:
     return validate_sql(
         sql,
         alias=ALIAS,
-        database=DATABASE,
         catalog=MysqlCatalog(),
         pii_config=MYSQL_PII,
         codec=OWN,

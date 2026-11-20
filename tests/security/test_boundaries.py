@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from named_database import extras
 from sqlglot import exp
 from support import KEY, OWN, RUNTIME, Catalog, SpyConnection, SpyResult, validate
 from typed_columns import typed
@@ -196,7 +197,7 @@ def test_columns_are_reflected_per_schema_and_cached_per_table(
     inspector = StubInspector()
     monkeypatch.setattr(schema_module, "inspect", lambda _connection: inspector)
     catalog = ReflectedCatalog(
-        sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", "d"
+        sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", extras("d")
     )
     assert catalog.columns("sales", "Items") == (ColumnSchema("sales.Items.c", "string"),)
     assert catalog.columns("dbo", "Items") == (ColumnSchema("dbo.Items.c", "string"),)
@@ -211,7 +212,7 @@ def test_an_empty_schema_is_reflected_as_the_default_schema(
     inspector = StubInspector()
     monkeypatch.setattr(schema_module, "inspect", lambda _connection: inspector)
     catalog = ReflectedCatalog(
-        sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", "d"
+        sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", extras("d")
     )
     catalog.columns("", "T")
     assert inspector.calls == [("T", None)]
@@ -249,7 +250,7 @@ def test_a_non_identifier_table_name_is_rejected_by_resolution() -> None:
 def test_a_vanished_table_is_rejected_when_its_columns_are_loaded() -> None:
     engine = sa.create_engine("sqlite://")
     with engine.connect() as connection:
-        catalog = ReflectedCatalog(connection, SchemaCache(8, 60), "a", "d")
+        catalog = ReflectedCatalog(connection, SchemaCache(8, 60), "a", extras("d"))
         with pytest.raises(DomainError) as info:
             catalog.columns("main", "Gone")
     assert info.value.public_message == f"Query rejected: {Reason.TABLE_GONE.value}."
@@ -486,7 +487,7 @@ def test_a_none_schema_from_reflection_becomes_an_empty_schema(
         schema_module, "reflect_tables", lambda _connection: [TableSummary(schema=None, name="T")]
     )
     catalog = ReflectedCatalog(
-        sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", "d"
+        sa.create_engine("sqlite://").connect(), SchemaCache(8, 60), "a", extras("d")
     )
     assert catalog.list_tables() == [("", "T")]
 

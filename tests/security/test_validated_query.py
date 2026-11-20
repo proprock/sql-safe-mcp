@@ -8,7 +8,7 @@ import pytest
 from sqlglot import exp
 from typed_columns import typed
 
-from sql_safe_mcp.config import PiiConfig, PiiRule, RuntimeConfig
+from sql_safe_mcp.config import PiiConfig, PiiRule, PiiScopeRule, RuntimeConfig
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.dialect import SQLSERVER
 from sql_safe_mcp.security.parser import ParserLimits, parse_select, validate_allowlist
@@ -29,8 +29,12 @@ class Catalog:
         ("dbo", "Users"): ["Id", "Email", "Name"],
     }
 
-    def __init__(self) -> None:
+    def __init__(self, database: str = "app") -> None:
         self.lookups = 0
+        self.database = database
+
+    def database_name(self) -> str:
+        return self.database
 
     def list_tables(self) -> list[tuple[str, str]]:
         self.lookups += 1
@@ -48,7 +52,6 @@ def build(sql: str, max_rows: int = 200, catalog: Catalog | None = None) -> Vali
     return validate_sql(
         sql,
         alias="srv",
-        database="app",
         catalog=catalog or Catalog(),
         pii_config=PII,
         codec=CODEC,
@@ -218,3 +221,40 @@ def test_user_comments_never_reach_the_generated_sql(sql: str) -> None:
     assert "*/" not in query.sql
     assert "--" not in query.sql
     assert query.sql == build(re.sub(r"/\*.*?\*/|--[^\n]*", " ", sql, flags=re.S)).sql
+
+
+BILLING = PiiConfig(
+    rules=[PiiRule(database="Billing", schema="dbo", table="Users", columns=["Email"])]
+)
+
+
+def build_for(database: str, sql: str, config: PiiConfig = BILLING) -> ValidatedQuery:
+    return validate_sql(
+        sql,
+        alias="srv",
+        catalog=Catalog(database),
+        pii_config=config,
+        codec=CODEC,
+        runtime=RUNTIME,
+        max_rows=10,
+        dialect=SQLSERVER,
+    )
+
+
+def test_policy_and_issued_query_use_the_database_the_server_resolved() -> None:
+    query = build_for("Billing", "SELECT Email FROM Users")
+    assert query.database == "Billing"
+    assert query.outputs[0].protected is True
+
+
+def test_a_rule_for_another_database_does_not_apply() -> None:
+    assert build_for("Other", "SELECT Email FROM Users").outputs[0].protected is False
+
+
+def test_deny_rule_applies_by_the_resolved_database_name() -> None:
+    config = PiiConfig(
+        deny=[PiiScopeRule(database="Billing", schema="dbo", table="Users", columns=["Email"])]
+    )
+    with pytest.raises(DomainError) as info:
+        build_for("Billing", "SELECT Email FROM Users", config)
+    assert info.value.code is ErrorCode.QUERY_REJECTED

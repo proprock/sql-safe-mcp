@@ -368,3 +368,44 @@ def test_live_token_against_an_int_column_must_be_an_int_token(live_mysql: LiveM
             assert "424242" not in text
 
     asyncio.run(scenario())
+
+
+def _database_spellings(name: str) -> dict[str, str]:
+    """Spellings a caller can send; whatever the server accepts must stay under the rules."""
+    fullwidth = {chr(code): chr(code + 0xFEE0) for code in range(0x21, 0x7F)}
+    return {
+        "other case": name.upper(),
+        "one trailing space": f"{name} ",
+        "three trailing spaces": f"{name}   ",
+        "fullwidth last letter": name[:-1] + fullwidth[name[-1]],
+        "trailing ideographic space": f"{name}\u3000",
+    }
+
+
+async def _spelled(live: LiveMySql, server: str, database: str) -> Any:
+    async with Client(create_server(live.sql_config), raise_exceptions=True) as client:
+        return await client.call_tool(
+            "execute_sql",
+            {"server": server, "database": database, "sql": "SELECT id, email FROM people"},
+        )
+
+
+@pytest.mark.parametrize("variant", list(_database_spellings("x")))
+def test_live_rule_naming_the_database_holds_for_every_spelling(
+    live_mysql: LiveMySql, variant: str
+) -> None:
+    spelling = _database_spellings(live_mysql.sql_database)[variant]
+    result = asyncio.run(_spelled(live_mysql, "exact", spelling))
+    if result.is_error:
+        return  # refusing the spelling is as safe as masking it
+    for row in result.structured_content["rows"]:
+        assert row[1] is None or str(row[1]).startswith("pii:v1:"), row
+
+
+@pytest.mark.parametrize("variant", list(_database_spellings("x")))
+def test_live_deny_rule_naming_the_database_holds_for_every_spelling(
+    live_mysql: LiveMySql, variant: str
+) -> None:
+    spelling = _database_spellings(live_mysql.sql_database)[variant]
+    result = asyncio.run(_spelled(live_mysql, "exact_deny", spelling))
+    assert result.is_error is True, result.structured_content

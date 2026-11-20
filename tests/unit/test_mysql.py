@@ -9,6 +9,7 @@ from sqlalchemy import Connection
 
 from sql_safe_mcp.db.extras import extras_for
 from sql_safe_mcp.db.mysql import MySqlExtras
+from sql_safe_mcp.errors import DomainError, ErrorCode
 
 
 class FakeResult:
@@ -113,3 +114,19 @@ def test_get_stored_procedure_missing_returns_none() -> None:
     connection, _ = _connection([])
 
     assert MySqlExtras().get_stored_procedure(connection, "app", None, "missing") is None
+
+
+@pytest.mark.parametrize("name", ["app", "Billing"])
+def test_current_database_returns_the_name_the_server_resolved(name: str) -> None:
+    connection, recording = _connection([(name,)])
+
+    assert MySqlExtras().current_database(connection) == name
+    assert recording.calls == [("SELECT DATABASE()", None)]
+
+
+def test_current_database_rejects_no_selected_database() -> None:
+    connection, _ = _connection([(None,)])
+
+    with pytest.raises(DomainError) as info:
+        MySqlExtras().current_database(connection)
+    assert info.value.code is ErrorCode.DATABASE_ERROR

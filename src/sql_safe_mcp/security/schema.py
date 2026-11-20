@@ -12,6 +12,7 @@ from sqlalchemy import types as sqltypes
 from sqlalchemy.exc import NoSuchTableError
 from sqlglot import exp
 
+from sql_safe_mcp.db.extras import DatabaseExtras
 from sql_safe_mcp.db.reflection import list_tables as reflect_tables
 from sql_safe_mcp.security.dialect import SQLSERVER, SqlDialect
 from sql_safe_mcp.security.parser import reject
@@ -70,6 +71,10 @@ class TableSchema:
 class TableCatalog(Protocol):
     """Reflected user base tables of one alias and database."""
 
+    def database_name(self) -> str:
+        """The database as the server names it, never the caller's spelling."""
+        ...
+
     def list_tables(self) -> Sequence[tuple[str, str]]: ...
 
     def columns(self, schema: str, table: str) -> Sequence[ColumnSchema]: ...
@@ -111,14 +116,29 @@ class SchemaCache:
 
 
 class ReflectedCatalog:
-    """Inspector-backed catalog; cache keys always include server alias and database."""
+    """Inspector-backed catalog; cache keys include the server alias and the canonical database.
+
+    The database name comes from the open connection (one query per instance), so every spelling
+    of a database the server accepts shares one cache entry and one PII policy scope.
+    """
 
     def __init__(
-        self, connection: Connection, cache: SchemaCache, alias: str, database: str
+        self, connection: Connection, cache: SchemaCache, alias: str, extras: DatabaseExtras
     ) -> None:
         self._connection = connection
         self._cache = cache
-        self._scope = (alias, database)
+        self._alias = alias
+        self._extras = extras
+        self._database: str | None = None
+
+    def database_name(self) -> str:
+        if self._database is None:
+            self._database = self._extras.current_database(self._connection)
+        return self._database
+
+    @property
+    def _scope(self) -> tuple[str, str]:
+        return (self._alias, self.database_name())
 
     def list_tables(self) -> list[tuple[str, str]]:
         key = (*self._scope, "tables")

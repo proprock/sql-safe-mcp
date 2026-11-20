@@ -48,6 +48,9 @@ class Catalog:
         ("sales", "Items"): ["Id"],
     }
 
+    def database_name(self) -> str:
+        return DATABASE
+
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
@@ -59,7 +62,6 @@ def validate(sql: str, max_rows: int = 200) -> ValidatedQuery:
     return validate_sql(
         sql,
         alias=ALIAS,
-        database=DATABASE,
         catalog=Catalog(),
         pii_config=PII,
         codec=OWN,

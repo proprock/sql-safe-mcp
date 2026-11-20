@@ -49,7 +49,7 @@ def _service(connection: SpyConnection) -> DatabaseService:
     return DatabaseService(
         config,
         cast(EngineRegistry, _SpyRegistry(connection)),
-        catalog_factory=lambda _connection, alias, _database: (
+        catalog_factory=lambda _connection, alias: (
             Catalog() if ENGINES[alias] == "sqlserver" else MysqlCatalog()
         ),
     )

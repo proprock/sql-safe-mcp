@@ -18,14 +18,16 @@ from sql_safe_mcp.security.tokens import TokenCodec
 pytestmark = pytest.mark.integration
 
 
-def call(live: LiveDatabase, server: str, sql: str, **extra: Any) -> tuple[bool, Any]:
+def call(
+    live: LiveDatabase, server: str, sql: str, database: str | None = None, **extra: Any
+) -> tuple[bool, Any]:
     """Run execute_sql through a real MCP client; return (is_error, content or error text)."""
 
     async def scenario() -> tuple[bool, Any]:
         async with Client(create_server(live.config), raise_exceptions=True) as client:
             result = await client.call_tool(
                 "execute_sql",
-                {"server": server, "database": live.database, "sql": sql, **extra},
+                {"server": server, "database": database or live.database, "sql": sql, **extra},
             )
             if result.is_error:
                 content = result.content[0]
@@ -304,3 +306,54 @@ def test_live_token_of_another_type_is_rejected_before_the_database(
     rejected(live, f"SELECT Id FROM {users} WHERE Email IN ('{wrong}')")
     assert "424242" not in caplog.text
     assert canary_state(live) == before
+
+
+def _database_spellings(name: str) -> dict[str, str]:
+    """Spellings a caller can send that SQL Server may still resolve to the same database."""
+    fullwidth = {chr(code): chr(code + 0xFEE0) for code in range(0x21, 0x7F)}
+    return {
+        "other case": name.swapcase(),
+        "one trailing space": f"{name} ",
+        "three trailing spaces": f"{name}   ",
+        "fullwidth first letter": fullwidth[name[0]] + name[1:],
+        "fullwidth last letter": name[:-1] + fullwidth[name[-1]],
+        "trailing ideographic space": f"{name}\u3000",
+    }
+
+
+def _assert_no_plaintext(live: LiveDatabase, server: str, sql: str, database: str) -> None:
+    is_error, content = call(live, server, sql, database=database)
+    if is_error:
+        return  # refusing the spelling is as safe as masking it
+    assert json.dumps(content).count(live.emails[0]) == 0
+    for row in content["rows"]:
+        assert str(row[1]).startswith("pii:v1:"), row
+
+
+@pytest.mark.parametrize("variant", list(_database_spellings("SqlSafeMcpTests")))
+def test_live_rule_naming_the_database_holds_for_every_spelling(
+    live_database: LiveDatabase, variant: str
+) -> None:
+    live = live_database
+    spelling = _database_spellings(live.database)[variant]
+    sql = f"SELECT Id, Email FROM {table(live, 'Users')} WHERE TenantId = 1 ORDER BY Id"
+    _assert_no_plaintext(live, "exact", sql, spelling)
+
+
+@pytest.mark.parametrize("variant", list(_database_spellings("SqlSafeMcpTests")))
+def test_live_deny_rule_naming_the_database_holds_for_every_spelling(
+    live_database: LiveDatabase, variant: str
+) -> None:
+    live = live_database
+    spelling = _database_spellings(live.database)[variant]
+    sql = f"SELECT Id, Email FROM {table(live, 'Users')} ORDER BY Id"
+    is_error, content = call(live, "exact_deny", sql, database=spelling)
+    assert is_error is True, content
+
+
+def test_live_exact_database_rule_masks_the_exact_name(live_database: LiveDatabase) -> None:
+    live = live_database
+    content = ok(
+        live, f"SELECT Id, Email FROM {table(live, 'Users')} WHERE TenantId = 1", server="exact"
+    )
+    assert all(row[1].startswith("pii:v1:") for row in content["rows"])

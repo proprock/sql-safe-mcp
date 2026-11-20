@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import Connection, text
 
-from sql_safe_mcp.db.extras import DatabaseExtras
+from sql_safe_mcp.db.extras import DatabaseExtras, read_database_name
 from sql_safe_mcp.models import StoredProcedureDefinition, StoredProcedureSummary
 
 SYSTEM_DATABASES = ("information_schema", "mysql", "performance_schema", "sys")
@@ -10,6 +10,9 @@ SYSTEM_DATABASES = ("information_schema", "mysql", "performance_schema", "sys")
 
 class MySqlExtras(DatabaseExtras):
     """MySQL and MariaDB: a database is the catalog, there is no separate schema."""
+
+    def current_database(self, connection: Connection) -> str:
+        return read_database_name(connection, "SELECT DATABASE()")
 
     def list_databases(self, connection: Connection) -> list[str]:
         rows = connection.execute(

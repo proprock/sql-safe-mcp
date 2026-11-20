@@ -24,6 +24,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sql_safe_mcp import service as service_module
 from sql_safe_mcp.config import AppConfig, RuntimeConfig, ServerConfig
 from sql_safe_mcp.db.registry import EngineRegistry
+from sql_safe_mcp.db.sqlserver import SqlServerExtras
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.models import StoredProcedureDefinition, StoredProcedureSummary, TableSummary
 from sql_safe_mcp.service import DatabaseService
@@ -454,24 +455,30 @@ def test_pool_timeout_log_line_keeps_the_database(
 # --- schema cache --------------------------------------------------------------------------
 
 
-def test_reflected_catalog_is_scoped_to_its_alias_and_database(
+def test_reflected_catalog_is_scoped_to_its_alias_and_the_engines_extras(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     built: list[tuple[object, ...]] = []
     monkeypatch.setattr(service_module, "ReflectedCatalog", lambda *args: built.append(args))
     service = DatabaseService(_config(), cast(EngineRegistry, RunningRegistry()))
 
-    service._reflected_catalog(cast(sa.Connection, CONNECTION), "alpha", "main")
+    service._reflected_catalog(cast(sa.Connection, CONNECTION), "alpha")
 
-    assert built == [(CONNECTION, service._schema_cache, "alpha", "main")]
+    ((connection, cache, alias, extras),) = built
+    assert (connection, cache, alias) == (CONNECTION, service._schema_cache, "alpha")
+    assert isinstance(extras, SqlServerExtras)
 
 
-def test_reflected_catalog_reads_through_the_service_schema_cache() -> None:
+def test_reflected_catalog_reads_through_the_service_schema_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SQLite has no DB_NAME(); the server-resolved name is stubbed.
+    monkeypatch.setattr(SqlServerExtras, "current_database", lambda self, connection: "main")
     service = DatabaseService(_config(), cast(EngineRegistry, RunningRegistry()))
     engine = sa.create_engine("sqlite://")
     with engine.begin() as connection:
         connection.execute(sa.text("CREATE TABLE Users (Id INTEGER, Email TEXT)"))
-        catalog = service._reflected_catalog(connection, "alpha", "main")
+        catalog = service._reflected_catalog(connection, "alpha")
 
         first = catalog.list_tables()
         connection.execute(sa.text("CREATE TABLE Later (Id INTEGER)"))

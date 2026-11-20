@@ -210,6 +210,9 @@ class _Connection:
 
 
 class _Catalog:
+    def database_name(self) -> str:
+        return "app"
+
     def list_tables(self) -> list[tuple[str, str]]:
         return [("dbo", "Users"), ("dbo", "Audit")]
 

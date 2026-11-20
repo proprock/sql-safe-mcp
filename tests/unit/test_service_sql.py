@@ -86,6 +86,9 @@ class FakeCatalog:
         ("dbo", "Users"): ["Id", "Email", "Name"],
     }
 
+    def database_name(self) -> str:
+        return "app"
+
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
@@ -156,7 +159,7 @@ def make(
     service = DatabaseService(
         _config(audit),
         cast(EngineRegistry, registry),
-        catalog_factory=lambda connection, alias, database: FakeCatalog(),
+        catalog_factory=lambda connection, alias: FakeCatalog(),
     )
     return service, registry
 
@@ -327,6 +330,38 @@ def test_audit_line_names_objects_and_counts_without_data(
         assert leaked not in caplog.text
 
 
+def test_audit_line_names_the_database_the_server_resolved(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _ = make(rows=[(1,)], audit=True)
+    with caplog.at_level(logging.INFO):
+        asyncio.run(service.execute_sql("secure", "APP  ", "SELECT Id FROM Users"))
+    (line,) = audit_lines(caplog)
+    assert line.startswith("audit server=secure database=app tables=dbo.Users ")
+
+
+def test_audit_line_for_a_database_failure_after_issue_names_the_resolved_database(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    driver = DBAPIError("stmt", (), Exception("[HYT00] Query timeout expired"))
+    service, _ = make(error=driver, audit=True)
+    with caplog.at_level(logging.INFO), pytest.raises(DomainError):
+        asyncio.run(service.execute_sql("secure", "APP  ", "SELECT Id FROM Users"))
+    (line,) = audit_lines(caplog)
+    assert line.startswith("audit server=secure database=app tables=dbo.Users ")
+    assert "code=TIMEOUT" in line
+
+
+def test_audit_line_for_a_query_rejected_before_issue_keeps_the_callers_string(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _ = make(audit=True)
+    with caplog.at_level(logging.INFO), pytest.raises(DomainError):
+        asyncio.run(service.execute_sql("secure", "Caller", "DELETE FROM Users"))
+    (line,) = audit_lines(caplog)
+    assert line.startswith("audit server=secure database=Caller ")
+
+
 def test_audit_line_reports_a_table_without_referenced_columns(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -384,12 +419,32 @@ def test_audit_line_for_a_database_failure_keeps_the_objects_and_reference(
 def test_audit_line_is_one_line_when_the_database_name_is_hostile(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    service, _ = make(rows=[(1,)], audit=True)
-    with caplog.at_level(logging.INFO):
-        asyncio.run(service.execute_sql("secure", "app\nfake=1 x", "SELECT Id FROM Users"))
+    service, _ = make(audit=True)
+    with caplog.at_level(logging.INFO), pytest.raises(DomainError):
+        asyncio.run(service.execute_sql("secure", "app\nfake=1 x", "DELETE FROM Users"))
     (line,) = audit_lines(caplog)
     assert "\n" not in line
     assert " database=app?fake?1?x " in line
+
+
+def test_audit_line_is_one_line_when_the_server_reports_a_hostile_database_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class HostileName(FakeCatalog):
+        def database_name(self) -> str:
+            return "app\nfake=1 x"
+
+    registry = FakeRegistry(FakeConnection(FakeResult(["Id"], [(1,)])))
+    service = DatabaseService(
+        _config(audit=True),
+        cast(EngineRegistry, registry),
+        catalog_factory=lambda connection, alias: HostileName(),
+    )
+    with caplog.at_level(logging.INFO):
+        execute(service, "SELECT Id FROM Users")
+    (line,) = audit_lines(caplog)
+    assert "\n" not in line
+    assert line.startswith("audit server=secure database=app?fake?1?x tables=dbo.Users ")
 
 
 def test_other_operations_log_the_redacted_driver_message(
@@ -469,18 +524,18 @@ def test_execute_sql_denial_names_the_required_access_level() -> None:
     )
 
 
-def test_catalog_factory_gets_the_open_connection_alias_and_database() -> None:
+def test_catalog_factory_gets_the_open_connection_and_alias() -> None:
     registry = FakeRegistry(FakeConnection(FakeResult(["Id"], [(1,)])))
-    seen: list[tuple[object, str, str]] = []
+    seen: list[tuple[object, str]] = []
 
-    def factory(connection: Any, alias: str, database: str) -> FakeCatalog:
-        seen.append((connection, alias, database))
+    def factory(connection: Any, alias: str) -> FakeCatalog:
+        seen.append((connection, alias))
         return FakeCatalog()
 
     service = DatabaseService(_config(), cast(EngineRegistry, registry), catalog_factory=factory)
     execute(service, "SELECT Id FROM Users")
 
-    assert seen == [(registry.connection, "secure", "app")]
+    assert seen == [(registry.connection, "secure")]
 
 
 class _TwoTableCatalog(FakeCatalog):
@@ -497,7 +552,7 @@ def test_audit_line_joins_tables_with_a_comma_and_marks_no_table_with_a_dash(
     service = DatabaseService(
         _config(audit=True),
         cast(EngineRegistry, registry),
-        catalog_factory=lambda connection, alias, database: _TwoTableCatalog(),
+        catalog_factory=lambda connection, alias: _TwoTableCatalog(),
     )
     with caplog.at_level(logging.INFO):
         execute(

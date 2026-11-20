@@ -28,6 +28,9 @@ class Catalog:
         ("dbo", "Users"): ["Id", "Email", "Name"],
     }
 
+    def database_name(self) -> str:
+        return "app"
+
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
@@ -71,7 +74,6 @@ def build(sql: str, max_rows: int = 3) -> ValidatedQuery:
     return validate_sql(
         sql,
         alias="srv",
-        database="app",
         catalog=Catalog(),
         pii_config=PII,
         codec=CODEC,
@@ -150,7 +152,6 @@ def test_protected_cells_are_tokenized_with_the_domain_of_their_column() -> None
     query = validate_sql(
         "SELECT Email, Name FROM Users",
         alias="srv",
-        database="app",
         catalog=Catalog(),
         pii_config=config,
         codec=CODEC,
@@ -284,7 +285,6 @@ def _counted(rows: Sequence[tuple[Any, ...]], threshold: int):
         # Mixed outputs exercise per-column handling; the fake result supplies the rows.
         "SELECT Name, COUNT(*) AS n, Id FROM Users",
         alias="srv",
-        database="app",
         catalog=Catalog(),
         pii_config=PII,
         codec=CODEC,
@@ -340,7 +340,6 @@ def test_validated_query_carries_the_threshold() -> None:
     query = validate_sql(
         "SELECT COUNT(*) FROM Users",
         alias="srv",
-        database="app",
         catalog=Catalog(),
         pii_config=PII,
         codec=CODEC,
