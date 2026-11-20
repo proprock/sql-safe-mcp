@@ -364,3 +364,112 @@ def test_registry_wires_the_ttl() -> None:
 
     invalid(TokenCodec("a", KEY).encrypt("x"), codec)
     assert codec.decrypt(TokenCodec("a", KEY, ttl_seconds=60).encrypt("x")) == "x"
+
+
+# Known-answer vectors: alias "kat", key bytes(range(32)). Encryption is randomized, so only
+# decryption is pinned. They pin the token layout, AAD, JSON payload, padding, issue time and
+# type tags across versions. Never regenerate these; a format change adds a new prefix and new
+# vectors and keeps these decrypting or explicitly drops v1.
+KAT_STR = (
+    "pii:v1:aqXVDQMmC8rXVrxxqeDDjD8M4F9GPlAvW2N3NGTuyjheGmHVL9JXe"
+    "tokp6ilJX6ttSV30Q0jrxQgRknMGuz5kteKNMLGItZaQpSkz1bLrdcxd8Sdv"
+    "Y4yloZWk9Y"
+)
+KAT_INT = (
+    "pii:v1:h5zdcUR9xLUB0-aXbedtj_CpdNOYFq1BRZ98VlOTpoohFtLaD8Xel"
+    "H4fE6xOC2oBq2YLD_B7gOlCcI_inmDQW4cZtdXcUeOQUJIEmb4baih03C8hz"
+    "XrL7Q7Ba3w"
+)
+KAT_BOOL = (
+    "pii:v1:4yV6eW-cimBppVynwRuMr98sKyLb191SFPEhsDUGHpTQmnW8Q1ikF"
+    "tzjMHByzrmAAvCXbtFfgXEBHTyqnY19XsgUezqUrfncUlwx9yRen2EHpKdPy"
+    "rnJD4uvKCI"
+)
+KAT_FLOAT = (
+    "pii:v1:83OW-GYBtTzd8ktc7GGYAEufDG2P-NdO45yFvARUhsI0wK1D2K3cw"
+    "nFs-I4G-Mb_fM2NL7pULpiAORVvaQnNsaI8eRt8W9cVSubjXXHwZtWxws2ZR"
+    "XksREuTxhM"
+)
+KAT_DECIMAL = (
+    "pii:v1:L9dCmdflkraypld7uL-LGLtzEVGlFmlUNnLs1o-YxWfKplZmPw2uo"
+    "H9vJl8OBPZoXrQeCXf4Tk-DMuq33jED29DaKkGqlHl7oFlfV39vaWTG64Oz6"
+    "XjsZNiEs6E"
+)
+KAT_DATE = (
+    "pii:v1:3eUtulgEjWW2uwSESb9c6heCWQCLwjtqEwwZiRXmnZwipzbcriWUi"
+    "6lETTSADu4kvclVZbyE7Kxab2OY0m71IAAVbNqguY1jWcTL2qBg6tMakKypV"
+    "HDqe05UUBk"
+)
+KAT_TIME = (
+    "pii:v1:tMDjDyASCysOQKrBkkVtoaAgZ_NhLO2O54FJHZQBBgVURvxS3pClL"
+    "bka8heyrmFawL5HR71jGpf3LRHumnTh614xKAYsZ1kWXeoqxPeQghhby9cev"
+    "fk022ur9xw"
+)
+KAT_DATETIME = (
+    "pii:v1:QuaUr3fyklI9cHag5rzLmq1mYaqp5FTMvzgKLTvGWXTexEwE87JnG"
+    "hzxWo_1IkcoSVzsXmnokVcKLIjLdC6SUnogomkvf-OOTOWGMS38_7hn3Z6bJ"
+    "9-WGXyfK9Q"
+)
+KAT_DATETIME_UTC = (
+    "pii:v1:Kk7YRQOWUkjPUX_lC7i63-KkOWXBnVHzHMWgqAjwrTkqSDTPxAkRb"
+    "6ubvk-lbbtg5MIaZQWgat-uM8Sfyk9ikQTgH-BlOq2IVt8g_VjNyCAhnDdfx"
+    "tC_f88xYEo"
+)
+KAT_UUID = (
+    "pii:v1:GE9GUxRscs1yTgiObYhTy_wRvO1hs9DU1Zq1nyWam_Lap4BJSJZyr"
+    "fn1ugeODEBzScpciaL-ozlE7CNvxWaT19mtBtfBLiC_d9SE0KJ7a7QzCwrZD"
+    "0CWlhK79zDSJenbFYOBNxiQrPni_Mx3uiDRih3jKV-7UYFmbPEceg"
+)
+KAT_BYTES = (
+    "pii:v1:DWtepSmJZOQO0mMliFqSxQsnU7fKgQzTrWJAEHBpZMwYIqkdfm7nK"
+    "FrTya3989Goie6vzuOQzadro3eARRGu5-e_Wh-hoFprUWB2v6CkinETIFYdX"
+    "kDpVWe5siU"
+)
+KAT_DOMAIN = (
+    "pii:v1:XorCSRSkLrqQi00KkVnsXJoWzBpVaoCrvkho2-yGa1m0nJ8rVDBCK"
+    "AIW3R8-e8wwEMLWa9yGhfKCsGdHs0qmG7tYdRtZVg13kFCCJKG0RfdCobbsp"
+    "V09xjvw7_4"
+)
+# Issued at 1_700_000_000 with ttl_seconds=3600.
+KAT_TTL = (
+    "pii:v1:J_GyGlzxTHhuq-mwBkZWECei0EfltNJaIRyHN5TKdAkFOLu6q3kJl"
+    "ebd6fBco0kJoDuV9FFFRFihpfaGosVaIcHDJLQXPNJHGQBwHSXGY0QqwhTni"
+    "U1yWpEnJXk"
+)
+KAT_TYPED = [
+    pytest.param(KAT_STR, "alpha", str, id="str"),
+    pytest.param(KAT_INT, 2**70, int, id="int"),
+    pytest.param(KAT_BOOL, True, bool, id="bool"),
+    pytest.param(KAT_FLOAT, 1.5, float, id="float"),
+    pytest.param(KAT_DECIMAL, Decimal("12345.67890"), Decimal, id="decimal"),
+    pytest.param(KAT_DATE, date(2024, 2, 29), date, id="date"),
+    pytest.param(KAT_TIME, time(1, 2, 3, 4), time, id="time"),
+    pytest.param(KAT_DATETIME, datetime(2024, 2, 29, 13, 14, 15, 123456), datetime, id="datetime"),
+    pytest.param(
+        KAT_DATETIME_UTC, datetime(2024, 2, 29, 13, 14, 15, tzinfo=UTC), datetime, id="datetime-utc"
+    ),
+    pytest.param(KAT_UUID, UUID("12345678-1234-5678-1234-567812345678"), UUID, id="uuid"),
+    pytest.param(KAT_BYTES, b"\x00\xff\x10", bytes, id="bytes"),
+]
+
+
+@pytest.mark.parametrize(("token", "expected", "kind"), KAT_TYPED)
+def test_known_answer_token_decrypts_to_the_same_value_and_type(
+    token: str, expected: object, kind: type
+) -> None:
+    value = TokenCodec("kat", KEY).decrypt(token)
+    # repr, not ==: equality hides Decimal scale and tzinfo changes.
+    assert repr(value) == repr(expected)
+    assert type(value) is kind
+
+
+def test_known_answer_domain_token_decrypts_in_its_domain() -> None:
+    assert TokenCodec("kat", KEY).decrypt(KAT_DOMAIN, "billing") == "bravo"
+
+
+def test_known_answer_ttl_token_is_accepted_up_to_its_issue_time_plus_ttl() -> None:
+    clock = _Clock(1_700_003_600)
+    codec = TokenCodec("kat", KEY, ttl_seconds=3600, clock=clock)
+    assert codec.decrypt(KAT_TTL) == "charlie"
+    clock.now = 1_700_003_601
+    invalid(KAT_TTL, codec)
