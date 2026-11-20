@@ -272,19 +272,29 @@ def test_pii_rule_validation_errors_are_reported() -> None:
     assert "pii rule columns must be unique" in summary(dict(base, columns=["c", "C"]))
 
 
+RULES_STAR = "pii rules cannot list '*' columns; only exposed_columns and deny can"
+EXPOSED_PARTIAL = "an exposed_columns column wildcard must be exactly ['*']"
+DENY_PARTIAL = "a deny column wildcard must be exactly ['*']"
+
+
 @pytest.mark.parametrize(
     ("section", "columns", "message"),
     [
-        ("rules", ["*"], "pii rules and exposed_columns cannot list '*' columns; only deny can"),
-        (
-            "exposed_columns",
-            ["*"],
-            "pii rules and exposed_columns cannot list '*' columns; only deny can",
-        ),
-        ("deny", ["a*"], "a deny column wildcard must be exactly ['*']"),
-        ("deny", ["*", "b"], "a deny column wildcard must be exactly ['*']"),
+        ("rules", ["*"], RULES_STAR),
+        ("rules", ["a*"], RULES_STAR),
+        ("exposed_columns", ["a*"], EXPOSED_PARTIAL),
+        ("exposed_columns", ["*", "b"], EXPOSED_PARTIAL),
+        ("deny", ["a*"], DENY_PARTIAL),
+        ("deny", ["*", "b"], DENY_PARTIAL),
     ],
-    ids=["rules-star", "exposed-star", "deny-partial", "deny-star-and-name"],
+    ids=[
+        "rules-star",
+        "rules-partial",
+        "exposed-partial",
+        "exposed-star-and-name",
+        "deny-partial",
+        "deny-star-and-name",
+    ],
 )
 def test_column_wildcards_are_reported_per_section(
     section: str, columns: list[str], message: str
@@ -299,10 +309,11 @@ def test_column_wildcards_are_reported_per_section(
 @pytest.mark.parametrize(
     ("section", "columns", "message"),
     [
-        ("rules", ["*"], "pii rules and exposed_columns cannot list '*' columns; only deny can"),
-        ("deny", ["a*"], "a deny column wildcard must be exactly ['*']"),
+        ("rules", ["*"], RULES_STAR),
+        ("exposed_columns", ["a*"], EXPOSED_PARTIAL),
+        ("deny", ["a*"], DENY_PARTIAL),
     ],
-    ids=["rules-star", "deny-partial"],
+    ids=["rules-star", "exposed-partial", "deny-partial"],
 )
 def test_column_wildcard_errors_are_the_exact_text(
     section: str, columns: list[str], message: str
@@ -355,3 +366,83 @@ def test_root_level_validation_errors_have_no_location_prefix(tmp_path: Path) ->
     assert error.public_message == (
         "Invalid configuration: Value error, invalid server alias '_bad'"
     )
+
+
+@pytest.mark.parametrize("section", ["exposed_columns", "deny"])
+def test_a_lone_star_column_is_valid_in_exposed_columns_and_deny(section: str) -> None:
+    model = _model(base64.b64encode(bytes(range(32))).decode())
+    server = cast(dict[str, object], model["servers"])["s"]
+    assert isinstance(server, dict)
+    server["pii"] = {
+        "mode": "deny-by-default",
+        section: [{"table": "Ref_*", "columns": ["*"]}],
+    }
+
+    pii = AppConfig.model_validate(model).servers["s"].pii
+
+    assert pii is not None
+    assert [rule.columns for rule in getattr(pii, section)] == [["*"]]
+
+
+OPEN_EVERYTHING = (
+    "an exposed_columns entry cannot open every column of every table; use mode: protect"
+)
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"table": "*"},
+        {"table": "**"},
+        {"database": "*", "table": "*"},
+        {"database": "Crm", "table": "*"},
+        {"schema": "dbo", "table": "*"},
+        {"database": "Crm", "schema": "dbo", "table": "**"},
+    ],
+    ids=["star", "double-star", "any-database", "one-database", "one-schema", "database-schema"],
+)
+def test_an_exposed_entry_cannot_open_every_column_of_every_table(scope: dict[str, str]) -> None:
+    rule: dict[str, object] = {"database": "*", "table": "T", "columns": ["c"]}
+    pii: dict[str, object] = {
+        "mode": "deny-by-default",
+        "rules": [rule],
+        "exposed_columns": [dict(scope, columns=["*"])],
+    }
+
+    assert f"Value error, {OPEN_EVERYTHING} [type=value_error" in _pii_summary(pii)
+
+
+@pytest.mark.parametrize(
+    ("table", "columns"),
+    [("Ref_*", ["*"]), ("*", ["a"]), ("*", ["a", "b"]), ("?", ["*"]), ("*x", ["*"]), ("X*", ["*"])],
+    ids=[
+        "prefix-star",
+        "star-with-names",
+        "star-with-two-names",
+        "question",
+        "suffix-star",
+        "x-prefix-star",
+    ],
+)
+def test_narrower_exposed_entries_still_load(table: str, columns: list[str]) -> None:
+    model = _model(base64.b64encode(bytes(range(32))).decode())
+    server = cast(dict[str, object], model["servers"])["s"]
+    assert isinstance(server, dict)
+    server["pii"] = {
+        "mode": "deny-by-default",
+        "exposed_columns": [{"table": table, "columns": columns}],
+    }
+
+    pii = AppConfig.model_validate(model).servers["s"].pii
+
+    assert pii is not None
+    assert pii.exposed_columns[0].columns == columns
+
+
+def test_a_star_table_with_star_columns_is_still_valid_in_deny() -> None:
+    model = _model(base64.b64encode(bytes(range(32))).decode())
+    server = cast(dict[str, object], model["servers"])["s"]
+    assert isinstance(server, dict)
+    server["pii"] = {"mode": "deny-by-default", "deny": [{"table": "*", "columns": ["*"]}]}
+
+    assert AppConfig.model_validate(model).servers["s"].pii is not None

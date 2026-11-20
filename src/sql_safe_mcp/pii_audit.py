@@ -172,6 +172,11 @@ def audit_server(alias: str, server: ServerConfig, catalog: Catalog) -> AuditRep
                     f"{alias}: {kind} {_describe(rule)} matched {tables} table(s), "
                     f"{len(keys)} column(s)"
                 )
+                if kind == "exposed" and rule.columns == ["*"]:
+                    lines.append(
+                        f"WARNING: {alias}: exposed {_describe(rule)} opens every column of "
+                        f"{tables} table(s), including columns added later"
+                    )
     for database, entries in catalog.items():
         for schema, table, names in entries:
             for name in names:

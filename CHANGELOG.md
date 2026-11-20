@@ -9,6 +9,13 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Added
 
+- `exposed_columns` accepts `columns: ["*"]`, which opens every column of the matching tables in
+  `deny-by-default` mode (meant for reference tables with no personal data). `*` in any other
+  position of an `exposed_columns` entry, and any `*` in `pii.rules` columns, remains a startup
+  error; the error texts are now `pii rules cannot list '*' columns; only exposed_columns and deny
+  can` and `an exposed_columns column wildcard must be exactly ['*']`. An entry with `table: "*"`
+  and `columns: ["*"]` is rejected (use `mode: protect`). `--verify-pii-rules` warns
+  for each such entry that it opens every column of N table(s), including columns added later.
 - `sql-safe-mcp --scaffold-pii ALIAS [--database NAME]...` reflects an `all_pii_safe` alias (every
   visible database, or the named ones) and prints a draft `deny-by-default` section to stdout:
   `exposed_columns` for the remaining numeric and boolean columns, `deny` for binary and free-text

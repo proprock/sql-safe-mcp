@@ -921,7 +921,7 @@ def test_deny_by_default_alias_loads_without_database_on_exposed_and_deny(tmp_pa
     "pii",
     [
         '      rules: [{table: Users, columns: ["*"]}]',
-        '      mode: deny-by-default\n      exposed_columns: [{table: Users, columns: ["*"]}]',
+        '      mode: deny-by-default\n      exposed_columns: [{table: Users, columns: ["a*"]}]',
         "      mode: allow-all",
         "      exposed_columns: []",
     ],
@@ -929,6 +929,23 @@ def test_deny_by_default_alias_loads_without_database_on_exposed_and_deny(tmp_pa
 def test_invalid_deny_shapes_are_config_errors(tmp_path: Path, pii: str) -> None:
     with pytest.raises(DomainError, match="CONFIG_ERROR"):
         load_config(_write(tmp_path, _peds_config(pii)), _DENY_ENV)
+
+
+def test_a_star_exposed_entry_loads_from_yaml(tmp_path: Path) -> None:
+    config = load_config(
+        _write(
+            tmp_path,
+            _peds_config(
+                "      mode: deny-by-default\n"
+                '      exposed_columns: [{table: "Ref_*", columns: ["*"]}]'
+            ),
+        ),
+        _DENY_ENV,
+    )
+
+    pii = config.servers["peds"].pii
+    assert pii is not None
+    assert pii.exposed_columns[0].columns == ["*"]
 
 
 @pytest.mark.parametrize("section", ["exposed_columns", "deny"])
