@@ -113,18 +113,18 @@ SAFE_HARBOR_COLUMNS = [
     ("acct", "acct_id"),
     ("license", "license_no"),
     ("licence", "licence_no"),
-    ("vin", "vin_code"),
-    ("plate", "plate_no"),
-    ("url", "avatar_url"),
     ("biometric", "biometric_id"),
     ("fingerprint", "fingerprint_hash"),
     ("insurance", "insurance_id"),
     ("policy", "policy_no"),
     ("member", "member_id"),
-    ("city", "city_name"),
     ("street", "street_line"),
     ("county", "county_code"),
-    ("date", "admit_date"),
+    ("admission", "admission_code"),
+    ("admit", "admit_flag"),
+    ("discharg", "discharge_code"),
+    ("death", "death_code"),
+    ("deceased", "deceased_flag"),
 ]
 
 
@@ -154,3 +154,31 @@ def test_safe_harbor_fragment_is_silent_for_a_protected_column(fragment: str, co
 
     assert "looks personal" not in text
     assert (unmatched, errors) == (0, 0)
+
+
+# Ordinary names that the advisory must stay quiet about. Each one contains a fragment that a
+# bare-substring match would turn into noise (date, vin, url, city, plate, age).
+BENIGN_COLUMNS = [
+    "updated_at",
+    "UpdateDate",
+    "created_date",
+    "validated",
+    "template_id",
+    "hourly_rate",
+    "capacity",
+    "savings",
+    "driving_score",
+    "province",
+    "page",
+    "message",
+    "image",
+]
+
+
+@pytest.mark.parametrize("column", BENIGN_COLUMNS)
+def test_ordinary_column_names_do_not_look_personal(column: str) -> None:
+    pii: dict[str, object] = {"rules": [{"database": "clinic", "table": "t", "columns": ["id"]}]}
+
+    text, _, _ = _audit_columns(pii, column)
+
+    assert "looks personal" not in text

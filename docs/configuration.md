@@ -70,9 +70,9 @@ The command also prints `WARNING: unprotected column looks personal` for every c
 protects whose name contains one of (with `deny-by-default`, only columns in `exposed_columns`
 are checked, and denied columns never are): `email`, `phone`, `mobile`, `ssn`, `passport`, `dob`,
 `birth`, `address`, `zip`, `postal`, `name`, `diagnos`, `icd`, `mrn`, `guardian`, `ip_`, `device`,
-`photo`, `notes`, `fax`, `account`, `acct`, `license`, `licence`, `vin`, `plate`, `url`,
-`biometric`, `fingerprint`, `insurance`, `policy`, `member`, `city`, `street`, `county`, `date`.
-This list is fixed and name-based: it misses misspelled or opaque names, flags
+`photo`, `notes`, `fax`, `account`, `acct`, `license`, `licence`, `biometric`, `fingerprint`,
+`insurance`, `policy`, `member`, `street`, `county`, `admission`, `admit`, `discharg`, `death`,
+`deceased`. This list is fixed and name-based: it misses misspelled or opaque names, flags
 harmless ones, and never changes the exit code. It is a hint, not a guarantee that no personal
 data is exposed.
 
