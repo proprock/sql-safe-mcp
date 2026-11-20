@@ -37,6 +37,9 @@ class _Catalog:
     def __init__(self, schema: str) -> None:
         self._schema = schema
 
+    def database_name(self) -> str:
+        return DATABASE
+
     def list_tables(self) -> list[tuple[str, str]]:
         return [(self._schema, table) for table in TABLES]
 
@@ -54,7 +57,6 @@ def _generate(dialect: SqlDialect) -> dict[str, str]:
             query = validate_sql(
                 sql,
                 alias=ALIAS,
-                database=DATABASE,
                 catalog=catalog,
                 pii_config=_NO_MATCH,
                 codec=OWN,

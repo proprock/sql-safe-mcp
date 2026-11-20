@@ -55,6 +55,17 @@ cases: "parenthesized projection under alias" and its neighbours in
 `tests/security/test_boundaries.py`. The executor accepts only a `ValidatedQuery` created after the
 final AST check.
 
+The database name is canonicalized. The `database` argument of `execute_sql` only selects which
+database the connection opens; the server may accept spellings that differ from its own name (other
+case, trailing spaces, fullwidth letters). The PII policy, the `ValidatedQuery`, the schema-cache
+keys, and the audit line therefore use the name the open connection reports (`DB_NAME()` on SQL
+Server, `DATABASE()` on MySQL and MariaDB), never the caller's string. A rule's `database` is
+compared with that name; a query refused before it is issued is audited with the caller's string.
+This closes audit finding F-01. Tests: `tests/security/test_validated_query.py`,
+`tests/security/test_schema.py`, and the live spelling tests in
+`tests/integration/sqlserver/test_live_execute_sql.py` and
+`tests/integration/mysql/test_live_mysql_sql.py`.
+
 Diagnostic logs go to stderr. A database error from `execute_sql` is logged as its class and
 SQLSTATE or code only, never its message, because drivers echo values from the query. For other
 operations the message is kept, with the connection URL's user name and password replaced with

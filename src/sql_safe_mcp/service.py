@@ -42,7 +42,7 @@ from sql_safe_mcp.security.validated_query import ValidatedQuery
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("sql_safe_mcp.audit")
-CatalogFactory = Callable[[Connection, str, str], TableCatalog]
+CatalogFactory = Callable[[Connection, str], TableCatalog]
 _SCHEMA_CACHE_ENTRIES = 1024
 _SCHEMA_CACHE_TTL_SECONDS = 300.0
 _TIMEOUT_SQLSTATES = frozenset({"HYT00", "HYT01"})
@@ -122,6 +122,11 @@ def _qualified_name(schema: str | None, name: str) -> str:
     return name if schema is None else f"{schema}.{name}"
 
 
+def _audited(caller_database: str, issued: ValidatedQuery | None) -> str:
+    """Prefer the database the server resolved; keep the caller's string for refused queries."""
+    return caller_database if issued is None else issued.database
+
+
 def _audit_name(value: str) -> str:
     """Keep a caller- or metadata-supplied name on one field of the audit line."""
     return re.sub(r"[^\w.$#@-]", "?", value)
@@ -158,8 +163,9 @@ class DatabaseService:
         self._schema_cache = SchemaCache(_SCHEMA_CACHE_ENTRIES, _SCHEMA_CACHE_TTL_SECONDS)
         self._catalog_factory = catalog_factory or self._reflected_catalog
 
-    def _reflected_catalog(self, connection: Connection, alias: str, database: str) -> TableCatalog:
-        return ReflectedCatalog(connection, self._schema_cache, alias, database)
+    def _reflected_catalog(self, connection: Connection, alias: str) -> TableCatalog:
+        extras = extras_for(self.config.servers[alias].engine)
+        return ReflectedCatalog(connection, self._schema_cache, alias, extras)
 
     def _server(self, alias: str) -> ServerConfig:
         try:
@@ -424,8 +430,7 @@ class DatabaseService:
                 validated = issued = validate_sql(
                     sql,
                     alias=server,
-                    database=database,
-                    catalog=self._catalog_factory(connection, server, database),
+                    catalog=self._catalog_factory(connection, server),
                     pii_config=pii,
                     codec=codec,
                     runtime=runtime,
@@ -459,10 +464,18 @@ class DatabaseService:
             result = await self._run(server, database, "execute_sql", operation)
         except DomainError as exc:
             if self.config.logging.audit:
-                self._audit(server, database, issued, started, code=exc.code, reference=exc)
+                self._audit(
+                    server,
+                    _audited(database, issued),
+                    issued,
+                    started,
+                    code=exc.code,
+                    reference=exc,
+                )
             raise
         if self.config.logging.audit:
-            self._audit(server, database, issued, started, result=result)
+            assert issued is not None  # a successful call has always issued a query
+            self._audit(server, issued.database, issued, started, result=result)
         return result
 
     @staticmethod

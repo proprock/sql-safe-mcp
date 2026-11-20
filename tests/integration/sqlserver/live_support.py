@@ -12,7 +12,14 @@ from pydantic import SecretStr
 from sqlalchemy import Connection, create_engine
 from sqlalchemy.engine import URL, make_url
 
-from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, RuntimeConfig, ServerConfig
+from sql_safe_mcp.config import (
+    AppConfig,
+    PiiConfig,
+    PiiRule,
+    PiiScopeRule,
+    RuntimeConfig,
+    ServerConfig,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,16 +55,32 @@ def _execute_batch(connection: Connection, statements: list[str]) -> None:
         connection.exec_driver_sql(statement)
 
 
-def _pii_server(url: str, schema: str, key: bytes, key_env: str) -> ServerConfig:
+def _pii_server(
+    url: str,
+    schema: str,
+    key: bytes,
+    key_env: str,
+    rule_database: str = "*",
+    deny_database: str | None = None,
+) -> ServerConfig:
+    pii = PiiConfig(
+        rules=[PiiRule(database=rule_database, schema=schema, table="Users", columns=["Email"])]
+    )
+    if deny_database is not None:
+        pii = PiiConfig(
+            deny=[
+                PiiScopeRule(
+                    database=deny_database, schema=schema, table="Users", columns=["Email"]
+                )
+            ]
+        )
     return ServerConfig(
         engine="sqlserver",
         access_level="all_pii_safe",
         require_tls=False,  # the test container uses a self-signed certificate
         connection_url=SecretStr(url),
         pii_key_env=key_env,
-        pii=PiiConfig(
-            rules=[PiiRule(database="*", schema=schema, table="Users", columns=["Email"])]
-        ),
+        pii=pii,
         pii_key=SecretStr(base64.b64encode(key).decode()),
     )
 
@@ -181,6 +204,21 @@ def live_database() -> Iterator[LiveDatabase]:
                     alpha_schema,
                     pii_key,
                     "SMM_SECURE_KEY",
+                ),
+                # Rules name the exact database; no spelling the server accepts may escape them.
+                "exact": _pii_server(
+                    _url_for(admin_url, app_login, app_password, "master"),
+                    alpha_schema,
+                    secrets.token_bytes(32),
+                    "SMM_EXACT_KEY",
+                    rule_database=database,
+                ),
+                "exact_deny": _pii_server(
+                    _url_for(admin_url, app_login, app_password, "master"),
+                    alpha_schema,
+                    secrets.token_bytes(32),
+                    "SMM_EXACT_DENY_KEY",
+                    deny_database=database,
                 ),
                 "secure2": _pii_server(
                     _url_for(admin_url, app_login, app_password, "master"),

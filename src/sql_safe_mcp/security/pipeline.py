@@ -14,7 +14,6 @@ def validate_sql(
     sql: str,
     *,
     alias: str,
-    database: str,
     catalog: TableCatalog,
     pii_config: PiiConfig,
     codec: TokenCodec,
@@ -30,6 +29,7 @@ def validate_sql(
     query = parse_select(sql, limits, dialect)
     tables = resolve_tables(query, catalog, dialect)
     analyzed = analyze_query(query, tables, limits, dialect)
+    database = catalog.database_name()
     decision = PiiPolicy(database, pii_config, codec).evaluate(analyzed)
     return issue_validated_query(
         analyzed,

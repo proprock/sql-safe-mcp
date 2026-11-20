@@ -4,9 +4,11 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from sqlalchemy import Connection
 
 from sql_safe_mcp.db.sqlserver import SqlServerExtras
+from sql_safe_mcp.errors import DomainError, ErrorCode
 
 
 class FakeResult:
@@ -109,3 +111,18 @@ def test_get_stored_procedure_returns_none_for_missing_or_unqualified_name() -> 
     assert extras.get_stored_procedure(connection, "Application", None, "Missing") is None
     assert recording.calls == []
     assert extras.get_stored_procedure(connection, "Application", "dbo", "Missing") is None
+
+
+def test_current_database_returns_the_name_the_server_resolved() -> None:
+    connection, recording = _connection([("Billing",)])
+
+    assert SqlServerExtras().current_database(connection) == "Billing"
+    assert recording.calls == [("SELECT DB_NAME()", None)]
+
+
+def test_current_database_rejects_a_missing_name() -> None:
+    connection, _ = _connection([(None,)])
+
+    with pytest.raises(DomainError) as info:
+        SqlServerExtras().current_database(connection)
+    assert info.value.code is ErrorCode.DATABASE_ERROR

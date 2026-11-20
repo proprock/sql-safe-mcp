@@ -14,6 +14,11 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
   silently accepted on `metadata` aliases and silently overwritten on aliases that also set
   `pii_key_env` or `pii_key_file`. Use `pii_key_env` or `pii_key_file`; configurations that use
   them alone are unchanged.
+- `execute_sql` now applies PII rules, `pii.deny`, and schema-cache keys by the database name the
+  connection reports (`DB_NAME()`, `DATABASE()`), not by the string the caller sent. Previously a
+  spelling that SQL Server resolves to the same database, such as trailing spaces or fullwidth
+  letters, did not match a rule with `database: <name>` and returned the protected column in
+  clear text. The audit line also names the resolved database for issued queries.
 
 ## [2.0.0] - 2026-11-07
 

@@ -59,6 +59,8 @@ def test_live_all_metadata_tools(live_database: LiveDatabase) -> None:
                 "denied",
                 "secure",
                 "secure2",
+                "exact",
+                "exact_deny",
             }
             databases = await client.call_tool(
                 "list_databases",

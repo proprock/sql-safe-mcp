@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import secrets
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,7 +14,14 @@ from pydantic import SecretStr
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL, make_url
 
-from sql_safe_mcp.config import AppConfig, PiiConfig, PiiRule, RuntimeConfig, ServerConfig
+from sql_safe_mcp.config import (
+    AppConfig,
+    PiiConfig,
+    PiiRule,
+    PiiScopeRule,
+    RuntimeConfig,
+    ServerConfig,
+)
 
 Engine = Literal["mysql", "mariadb"]
 
@@ -61,26 +69,40 @@ def build_sql_config(
     engine: Engine, admin_url: URL, database: str, login: tuple[str, str], keys: dict[str, bytes]
 ) -> AppConfig:
     url = admin_url.set(username=login[0], password=login[1], database=database)
+
+    def server(key: bytes, alias: str, pii: PiiConfig) -> ServerConfig:
+        return ServerConfig(
+            engine=engine,
+            access_level="all_pii_safe",
+            require_tls=False,  # the test container has no verified TLS
+            connection_url=SecretStr(url.render_as_string(hide_password=False)),
+            pii_key_env=f"KEY_{alias.upper()}",
+            pii=pii,
+            pii_key=SecretStr(base64.b64encode(key).decode()),
+        )
+
+    wildcard = PiiConfig(
+        rules=[
+            PiiRule(database="*", table="people", columns=["email"]),
+            PiiRule(database="*", table="visits", columns=["hits"]),
+        ]
+    )
+    servers = {alias: server(key, alias, wildcard) for alias, key in keys.items()}
+    # Rules that name the exact database: no spelling the server accepts may escape them.
+    servers["exact"] = server(
+        secrets.token_bytes(32),
+        "exact",
+        PiiConfig(rules=[PiiRule(database=database, table="people", columns=["email"])]),
+    )
+    servers["exact_deny"] = server(
+        secrets.token_bytes(32),
+        "exact_deny",
+        PiiConfig(deny=[PiiScopeRule(database=database, table="people", columns=["email"])]),
+    )
     return AppConfig(
         version=1,
         runtime=RuntimeConfig(statement_timeout_seconds=5, pool_timeout_seconds=5),
-        servers={
-            alias: ServerConfig(
-                engine=engine,
-                access_level="all_pii_safe",
-                require_tls=False,  # the test container has no verified TLS
-                connection_url=SecretStr(url.render_as_string(hide_password=False)),
-                pii_key_env=f"KEY_{alias.upper()}",
-                pii=PiiConfig(
-                    rules=[
-                        PiiRule(database="*", table="people", columns=["email"]),
-                        PiiRule(database="*", table="visits", columns=["hits"]),
-                    ]
-                ),
-                pii_key=SecretStr(base64.b64encode(key).decode()),
-            )
-            for alias, key in keys.items()
-        },
+        servers=servers,
     )
 
 

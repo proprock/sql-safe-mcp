@@ -37,6 +37,9 @@ class Catalog:
         ("dbo", "Orders"): ["Id", "UserId", "Total"],
     }
 
+    def database_name(self) -> str:
+        return "sales"
+
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self.tables)
 
@@ -248,6 +251,9 @@ TYPED_COLUMNS: dict[str, TypeClass] = {
 
 
 class TypedCatalog:
+    def database_name(self) -> str:
+        return "sales"
+
     def list_tables(self) -> list[tuple[str, str]]:
         return [("dbo", "Facts")]
 

@@ -1,10 +1,13 @@
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from named_database import NamedDatabase, extras
 from sqlglot import exp
 from typed_columns import typed
 
+from sql_safe_mcp.db.extras import DatabaseExtras
 from sql_safe_mcp.errors import DomainError, ErrorCode
 from sql_safe_mcp.security.parser import ParserLimits, parse_select
 from sql_safe_mcp.security.schema import (
@@ -23,6 +26,9 @@ class FakeCatalog:
     def __init__(self, tables: Mapping[tuple[str, str], Sequence[str]]) -> None:
         self._tables = tables
         self.column_lookups: list[tuple[str, str]] = []
+
+    def database_name(self) -> str:
+        return "app"
 
     def list_tables(self) -> list[tuple[str, str]]:
         return list(self._tables)
@@ -152,7 +158,7 @@ def sqlite_connection():
 
 
 def test_reflected_catalog_lists_base_tables_and_columns(sqlite_connection) -> None:
-    catalog = ReflectedCatalog(sqlite_connection, SchemaCache(8, 60), "srv", "db")
+    catalog = ReflectedCatalog(sqlite_connection, SchemaCache(8, 60), "srv", extras("db"))
     assert catalog.list_tables() == [("main", "Users")]
     assert list(catalog.columns("main", "Users")) == [
         ColumnSchema("Id", "integer"),
@@ -162,18 +168,40 @@ def test_reflected_catalog_lists_base_tables_and_columns(sqlite_connection) -> N
 
 def test_reflected_catalog_uses_cache_and_isolates_scopes(sqlite_connection) -> None:
     cache = SchemaCache(8, 60)
-    first = ReflectedCatalog(sqlite_connection, cache, "srv", "db")
+    first = ReflectedCatalog(sqlite_connection, cache, "srv", extras("db"))
     first.list_tables()
     sqlite_connection.execute(sa.text("CREATE TABLE Later (Id INTEGER)"))
     assert first.list_tables() == [("main", "Users")]
-    other_alias = ReflectedCatalog(sqlite_connection, cache, "srv2", "db")
+    other_alias = ReflectedCatalog(sqlite_connection, cache, "srv2", extras("db"))
     assert ("main", "Later") in other_alias.list_tables()
-    other_database = ReflectedCatalog(sqlite_connection, cache, "srv", "db2")
+    other_database = ReflectedCatalog(sqlite_connection, cache, "srv", extras("db2"))
     assert ("main", "Later") in other_database.list_tables()
 
 
+def test_catalog_reports_the_server_resolved_database_name_once(sqlite_connection) -> None:
+    named = NamedDatabase("Billing")
+    catalog = ReflectedCatalog(
+        sqlite_connection, SchemaCache(8, 60), "srv", cast(DatabaseExtras, named)
+    )
+    assert catalog.database_name() == "Billing"
+    assert catalog.database_name() == "Billing"
+    assert named.calls == 1
+    assert named.connections == [sqlite_connection]
+
+
+def test_cache_key_uses_the_canonical_name_not_the_callers_string(sqlite_connection) -> None:
+    cache = SchemaCache(8, 60)
+    first = ReflectedCatalog(sqlite_connection, cache, "srv", extras("Billing"))
+    first.list_tables()
+    sqlite_connection.execute(sa.text("CREATE TABLE Later (Id INTEGER)"))
+    same_database_other_spelling = ReflectedCatalog(
+        sqlite_connection, cache, "srv", extras("Billing")
+    )
+    assert same_database_other_spelling.list_tables() == [("main", "Users")]
+
+
 def test_missing_table_columns_are_rejected(sqlite_connection) -> None:
-    catalog = ReflectedCatalog(sqlite_connection, SchemaCache(8, 60), "srv", "db")
+    catalog = ReflectedCatalog(sqlite_connection, SchemaCache(8, 60), "srv", extras("db"))
     with pytest.raises(DomainError) as info:
         catalog.columns("main", "Gone")
     assert info.value.code is ErrorCode.QUERY_REJECTED
