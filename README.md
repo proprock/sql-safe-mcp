@@ -246,6 +246,9 @@ it; `require_tls: false` turns the check off and logs a warning at every start
 - **Check rules against the schema** - `sql-safe-mcp --verify-pii-rules [--strict]` reports what
   each rule matches and flags unprotected columns whose names look personal
   ([Verifying PII rules](docs/configuration.md#verifying-pii-rules-against-the-real-schema)).
+- **Draft the policy** - `sql-safe-mcp --scaffold-pii ALIAS [--database NAME]...` prints a
+  starting `deny-by-default` section from the reflected schema, a suggestion to review
+  ([Drafting](docs/configuration.md#drafting-a-deny-by-default-section)).
 - **Limit token reuse** - rules with different `domain` values reject each other's tokens, and
   `runtime.token_ttl_seconds` expires old tokens
   ([Token domains](docs/configuration.md#token-domains),

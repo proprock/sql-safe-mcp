@@ -101,6 +101,8 @@ Two points often missed:
       stored procedure source (finding F-09), so review procedure bodies for literal identifiers.
 - [ ] `pii.mode: deny-by-default`, with `exposed_columns` limited to non-identifying columns
       (the [strict template](../sql-safe-mcp.example-strict.yaml) shows the shape).
+      `sql-safe-mcp --scaffold-pii ALIAS` drafts both lists from the schema; the draft is a
+      suggestion, so review every column in it.
 - [ ] `pii.deny` for free text, attachments, and photos.
 - [ ] `pii.rules` with one `domain` per entity (patient, guardian, clinical).
 - [ ] Dates of birth, ZIP codes, schools, and guardian names protected like names.

@@ -7,13 +7,16 @@ import time
 from typing import Any
 
 import pytest
+import yaml
 from mcp import Client
 from mcp_types import TextContent
 from mysql_support import LiveMySql, kill_running_queries, live_mysql, running_queries
 from sqlalchemy import create_engine
 
-from sql_safe_mcp.config import RuntimeConfig
+from sql_safe_mcp.config import PiiConfig, RuntimeConfig
 from sql_safe_mcp.mcp_server import create_server
+from sql_safe_mcp.pii_audit import collect_catalog, verify_pii_rules
+from sql_safe_mcp.pii_scaffold import collect_scaffold_catalog, render_scaffold
 from sql_safe_mcp.security.tokens import TokenCodec
 
 pytestmark = pytest.mark.integration
@@ -463,3 +466,31 @@ def test_live_engine_set_for_the_other_server_names_the_fix(live_mysql: LiveMySq
     text = _error_text(asyncio.run(scenario()))
     assert "CONFIG_ERROR" in text
     assert f"set engine: {live_mysql.engine}" in text
+
+
+def test_live_scaffold_drafts_a_section_that_passes_strict_verification(
+    live_mysql: LiveMySql,
+) -> None:
+    config = live_mysql.sql_config
+    pii = config.servers["secure"].pii
+    assert pii is not None
+
+    catalog = collect_scaffold_catalog(config, "secure", [live_mysql.sql_database.upper()])
+    text = render_scaffold("secure", catalog, pii)
+    draft = yaml.safe_load(text)
+
+    assert list(catalog.databases) == [live_mysql.sql_database]
+    assert all("schema" not in entry for entry in draft["exposed_columns"] + draft["deny"])
+    exposed = {entry["table"]: set(entry["columns"]) for entry in draft["exposed_columns"]}
+    denied = {entry["table"]: set(entry["columns"]) for entry in draft["deny"]}
+    assert {"score", "amount"} <= exposed["people"]
+    assert denied["people"] == {"raw"}
+    assert "visits" not in exposed  # visits.hits is protected by an existing rule
+    assert "# protected by an existing rule:" in text and "visits.hits" in text
+
+    pasted = config.servers["secure"].model_copy(update={"pii": PiiConfig.model_validate(draft)})
+    report = verify_pii_rules(
+        config.model_copy(update={"servers": {"secure": pasted}}), collect_catalog
+    )
+    assert report.errors == 0
+    assert report.unmatched_rules == 0
