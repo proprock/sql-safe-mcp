@@ -120,6 +120,36 @@ def test_a_missing_pii_key_variable_is_named_without_its_value(tmp_path: Path) -
     )
 
 
+INLINE_KEY = base64.b64encode(b"k" * 32).decode()
+
+
+def test_inline_pii_key_is_rejected_for_a_metadata_alias(
+    tmp_path: Path,
+) -> None:
+    error = _error(_write(tmp_path, _yaml(extra=f"    pii_key: {INLINE_KEY}\n")))
+    assert error.public_message == (
+        "Invalid configuration: server 's': pii_key is not a configuration key; "
+        "use pii_key_file or pii_key_env"
+    )
+
+
+def test_inline_pii_key_beside_a_valid_pii_key_env_is_rejected(tmp_path: Path) -> None:
+    extra = (
+        "    access_level: all_pii_safe\n"
+        "    pii:\n"
+        "      rules:\n"
+        "        - {database: '*', table: T, columns: [c]}\n"
+        "    pii_key_env: K\n"
+        f"    pii_key: {INLINE_KEY}\n"
+    )
+    env = {"K": base64.b64encode(b"e" * 32).decode()}
+    error = _error(_write(tmp_path, _yaml(extra=extra)), env)
+    assert error.public_message == (
+        "Invalid configuration: server 's': pii_key is not a configuration key; "
+        "use pii_key_file or pii_key_env"
+    )
+
+
 def _model(key: str) -> dict[str, object]:
     return {
         "version": 1,

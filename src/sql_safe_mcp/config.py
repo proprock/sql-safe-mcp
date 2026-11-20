@@ -465,6 +465,13 @@ def load_config(path: str | Path, environ: Mapping[str, str] | None = None) -> A
         for alias, value in servers.items():
             if not isinstance(value, dict):
                 raise ValueError(f"server {alias!r} must be a mapping")
+            if "pii_key" in value:
+                # The loader writes its own value["pii_key"] below; a YAML key of that
+                # name would collide with it, so reject it before that write.
+                raise ValueError(
+                    f"server {alias!r}: pii_key is not a configuration key; "
+                    "use pii_key_file or pii_key_env"
+                )
             url = value.get("connection_url")
             if not isinstance(url, str):
                 raise ValueError(f"server {alias!r} requires connection_url")
