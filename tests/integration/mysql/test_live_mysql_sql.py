@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import pytest
 from mcp import Client
 from mcp_types import TextContent
-from mysql_support import LiveMySql, live_mysql
+from mysql_support import LiveMySql, kill_running_queries, live_mysql, running_queries
 from sqlalchemy import create_engine
 
+from sql_safe_mcp.config import RuntimeConfig
 from sql_safe_mcp.mcp_server import create_server
 from sql_safe_mcp.security.tokens import TokenCodec
 
@@ -409,3 +411,55 @@ def test_live_deny_rule_naming_the_database_holds_for_every_spelling(
     spelling = _database_spellings(live_mysql.sql_database)[variant]
     result = asyncio.run(_spelled(live_mysql, "exact_deny", spelling))
     assert result.is_error is True, result.structured_content
+
+
+HEAVY_SQL = "SELECT COUNT(*) FROM big a JOIN big b ON a.id <> b.id JOIN big c ON c.id <> a.id"
+
+
+_DRAIN_DEADLINE_SECONDS = 5
+
+
+def test_live_server_aborts_a_slow_query_before_the_client_gives_up(live_mysql: LiveMySql) -> None:
+    config = live_mysql.sql_config.model_copy(
+        update={"runtime": RuntimeConfig(statement_timeout_seconds=1, pool_timeout_seconds=5)}
+    )
+
+    async def scenario() -> tuple[Any, float]:
+        async with Client(create_server(config), raise_exceptions=True) as client:
+            started = time.perf_counter()
+            result = await asyncio.wait_for(_sql(client, live_mysql, HEAVY_SQL), timeout=20)
+            return result, time.perf_counter() - started
+
+    try:
+        result, elapsed = asyncio.run(scenario())
+        assert "TIMEOUT" in _error_text(result)
+        # The client read_timeout is 6 s here; only the server limit can answer in about 1 s.
+        assert elapsed < 4
+        deadline = time.monotonic() + _DRAIN_DEADLINE_SECONDS
+        while running_queries(live_mysql.admin_url, live_mysql.sql_database):
+            assert time.monotonic() < deadline, (
+                f"query still running on the server {_DRAIN_DEADLINE_SECONDS} s after TIMEOUT"
+            )
+            time.sleep(0.25)
+    finally:
+        kill_running_queries(live_mysql.admin_url, live_mysql.sql_database)
+
+
+def test_live_engine_set_for_the_other_server_names_the_fix(live_mysql: LiveMySql) -> None:
+    swapped = "mariadb" if live_mysql.engine == "mysql" else "mysql"
+    wrong = live_mysql.sql_config.model_copy(
+        update={
+            "servers": {
+                alias: server.model_copy(update={"engine": swapped})
+                for alias, server in live_mysql.sql_config.servers.items()
+            }
+        }
+    )
+
+    async def scenario() -> Any:
+        async with Client(create_server(wrong), raise_exceptions=True) as client:
+            return await _sql(client, live_mysql, "SELECT id FROM canary")
+
+    text = _error_text(asyncio.run(scenario()))
+    assert "CONFIG_ERROR" in text
+    assert f"set engine: {live_mysql.engine}" in text

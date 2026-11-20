@@ -9,11 +9,26 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Changed
 
+- **Release note:** a server whose `engine` does not match the real server now fails with
+  `CONFIG_ERROR` instead of connecting. A configuration with `engine: mysql` pointed at a MariaDB
+  server (or the reverse), which used to work, is rejected with the hint "set engine: mariadb" (or
+  `mysql`), because the server-side statement limit uses a different variable on each. Set
+  `engine` to match the server before upgrading.
 - `sql-safe-mcp --verify-pii-rules` warns about more unprotected column names that look personal:
   `fax`, `account`, `acct`, `license`, `licence`, `biometric`, `fingerprint`, `insurance`,
   `policy`, `member`, `street`, `county`, `admission`, `admit`, `discharg`, `death`, and
   `deceased`. These are hints only and never change the exit code. The full list is in
   `docs/configuration.md`.
+
+### Fixed
+
+- `statement_timeout_seconds` now stops the query on the server for MySQL and MariaDB. Before, the
+  client dropped the connection after the limit but the server kept running the query (it stayed
+  in `information_schema.PROCESSLIST` for seconds after the `TIMEOUT` error). Each session now sets
+  `max_execution_time` (MySQL) or `max_statement_time` (MariaDB), the client read timeout is 5
+  seconds longer than the limit, and the abort errors (MySQL 3024, MariaDB 1969) map to `TIMEOUT`.
+  A server that lacks the variable fails the connection instead of running without a limit (see
+  Changed).
 
 ### Security
 

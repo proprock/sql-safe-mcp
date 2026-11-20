@@ -8,6 +8,7 @@ from threading import RLock
 from typing import Any, TypeVar
 
 import anyio
+from pymysql.err import MySQLError
 from sqlalchemy import Engine, create_engine, event
 
 from sql_safe_mcp.config import AppConfig
@@ -16,6 +17,8 @@ from sql_safe_mcp.errors import DomainError, ErrorCode
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
+_CLIENT_TIMEOUT_MARGIN_SECONDS = 5
+_UNKNOWN_SYSTEM_VARIABLE = 1193  # MySQL and MariaDB: ER_UNKNOWN_SYSTEM_VARIABLE
 
 
 class EngineRegistry:
@@ -39,7 +42,8 @@ class EngineRegistry:
         if server.engine in ("mysql", "mariadb"):
             options["connect_args"] = {
                 "connect_timeout": self._config.runtime.pool_timeout_seconds,
-                "read_timeout": timeout,
+                # The server limit fires first; the client gives up only if the server is gone.
+                "read_timeout": timeout + _CLIENT_TIMEOUT_MARGIN_SECONDS,
                 "write_timeout": timeout,
             }
         engine = create_engine(
@@ -95,6 +99,33 @@ class EngineRegistry:
                         if mode and mode != "NO_BACKSLASH_ESCAPES"
                     ]
                     cursor.execute("SET SESSION sql_mode = %s", (",".join(modes),))
+                finally:
+                    cursor.close()
+
+            # max_execution_time is in milliseconds (MySQL); max_statement_time in seconds
+            # (MariaDB). A server without the variable is unsupported, so the SET error stays;
+            # the one expected cause, the wrong `engine` for the server, names its fix.
+            other_engine = "mariadb" if server.engine == "mysql" else "mysql"
+            limit_sql, limit_value = (
+                ("SET SESSION max_execution_time = %s", timeout * 1000)
+                if server.engine == "mysql"
+                else ("SET SESSION max_statement_time = %s", timeout)
+            )
+
+            @event.listens_for(engine, "connect")
+            def set_server_statement_limit(dbapi_connection: Any, _record: Any) -> None:
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute(limit_sql, (limit_value,))
+                except MySQLError as exc:
+                    if exc.args[:1] == (_UNKNOWN_SYSTEM_VARIABLE,):
+                        raise DomainError(
+                            ErrorCode.CONFIG_ERROR,
+                            f"Server {alias!r} does not support the statement time limit "
+                            f"that engine: {server.engine} uses.",
+                            hint=f"If it is a {other_engine} server, set engine: {other_engine}.",
+                        ) from None
+                    raise
                 finally:
                     cursor.close()
 
