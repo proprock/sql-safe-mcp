@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 
 from sqlalchemy import inspect
 from sqlalchemy.exc import NoSuchTableError
@@ -12,6 +11,7 @@ from sql_safe_mcp.db.extras import extras_for
 from sql_safe_mcp.db.reflection import list_tables
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.diagnostics import describe_error, secrets_for
+from sql_safe_mcp.security.rules import rule_covers_column, rule_matches_table
 
 # Name fragments the advisor flags on unprotected columns. A heuristic, not a guarantee.
 SUSPICIOUS_NAME_PARTS: tuple[str, ...] = (
@@ -126,14 +126,6 @@ def collect_catalog(config: AppConfig, alias: str) -> Catalog:
         registry.dispose()
 
 
-def _rule_matches(rule: PiiRule, database: str, schema: str | None, table: str) -> bool:
-    if rule.database != "*" and rule.database.casefold() != database.casefold():
-        return False
-    if rule.schema_ is not None and rule.schema_.casefold() != (schema or "").casefold():
-        return False
-    return fnmatchcase(table.casefold(), rule.table.casefold())
-
-
 def _describe(rule: PiiRule) -> str:
     schema = f"{rule.schema_}." if rule.schema_ else ""
     return f"{rule.database}.{schema}{rule.table}({', '.join(rule.columns)})"
@@ -144,14 +136,13 @@ type ColumnKey = tuple[str, str | None, str, str]
 
 def _match_columns(rule: PiiRule, catalog: Catalog) -> tuple[int, set[ColumnKey]]:
     """The tables a rule touches and the (database, schema, table, column) keys it covers."""
-    wanted = {column.casefold() for column in rule.columns}
     tables = 0
     covered: set[ColumnKey] = set()
     for database, entries in catalog.items():
         for schema, table, names in entries:
-            if not _rule_matches(rule, database, schema, table):
+            if not rule_matches_table(rule, database, schema, table):
                 continue
-            hits = [name for name in names if "*" in wanted or name.casefold() in wanted]
+            hits = [name for name in names if rule_covers_column(rule, name)]
             if not hits:
                 continue
             tables += 1

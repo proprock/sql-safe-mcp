@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
-from fnmatch import fnmatchcase
 from uuid import UUID
 
 from sqlglot import exp
@@ -13,6 +12,7 @@ from sql_safe_mcp.config import PiiConfig, PiiRule
 from sql_safe_mcp.security.lineage import AnalyzedQuery, ColumnRef, SourceColumn
 from sql_safe_mcp.security.parser import reject
 from sql_safe_mcp.security.reasons import Reason
+from sql_safe_mcp.security.rules import rule_covers_column, rule_matches_table
 from sql_safe_mcp.security.schema import TypeClass
 from sql_safe_mcp.security.tokens import PREFIX, TokenCodec
 
@@ -52,25 +52,17 @@ class PiiPolicy:
     """Decides protected-column usage from source lineage and configured rules only."""
 
     def __init__(self, database: str, config: PiiConfig, codec: TokenCodec) -> None:
-        self._database = database.casefold()
+        self._database = database
         self._config = config
         self._codec = codec
 
     def _matching(self, rules: Sequence[PiiRule], source: SourceColumn) -> list[PiiRule]:
-        schema = source.schema.casefold()
-        table = source.table.casefold()
-        column = source.column.casefold()
-        matched: list[PiiRule] = []
-        for rule in rules:
-            if rule.database != "*" and rule.database.casefold() != self._database:
-                continue
-            if rule.schema_ is not None and rule.schema_.casefold() != schema:
-                continue
-            if fnmatchcase(table, rule.table.casefold()) and (
-                rule.columns == ["*"] or column in {item.casefold() for item in rule.columns}
-            ):
-                matched.append(rule)
-        return matched
+        return [
+            rule
+            for rule in rules
+            if rule_matches_table(rule, self._database, source.schema, source.table)
+            and rule_covers_column(rule, source.column)
+        ]
 
     def _matches(self, rules: Sequence[PiiRule], source: SourceColumn) -> bool:
         return bool(self._matching(rules, source))
