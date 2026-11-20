@@ -505,3 +505,166 @@ def test_a_reflection_failure_names_the_database_without_the_secret(
         _collect(monkeypatch, tmp_path, visible=["a", "b"], pool=_Pool(fail_on="b"))
     assert str(raised.value).startswith("cannot reflect database 'b': ")
     assert "scaffold-pass-marker" not in str(raised.value)
+
+
+def test_a_long_list_of_protected_columns_is_cut_like_the_other_lists() -> None:
+    names = [f"c{i:02d}" for i in range(12)]
+    pii = PiiConfig(rules=[PiiRule(database="*", table="t", columns=names)])
+
+    text, _ = draft({"A": [table(None, "t", *(col(name) for name in names))]}, pii)
+
+    assert (
+        "# protected by an existing rule: t.c00, t.c01, t.c02, t.c03, t.c04, ... (+7 more)" in text
+    )
+    assert "t.c11" not in text
+
+
+# --- decisions the mutation gate must see ------------------------------------------------------
+
+
+def test_a_schema_scoped_rule_protects_only_that_schema() -> None:
+    pii = PiiConfig(rules=[PiiRule(database="*", schema="dbo", table="Orders", columns=["Amount"])])
+
+    _, loaded = draft(
+        {
+            "A": [
+                table("dbo", "Orders", col("Amount"), col("Total")),
+                table("hr", "Orders", col("Amount"), col("Total")),
+            ]
+        },
+        pii,
+    )
+
+    assert loaded["exposed_columns"] == [
+        {"schema": "dbo", "table": "Orders", "columns": ["Total"]},
+        {"schema": "hr", "table": "Orders", "columns": ["Amount", "Total"]},
+    ]
+
+
+def test_a_schema_with_a_star_is_not_listed_and_is_named() -> None:
+    text, loaded = draft({"A": [table("a*b", "t", col("x"), col("y"))]})
+
+    assert loaded["exposed_columns"] == []
+    assert "# not listable: a?b.t (the schema name has a '*')" in text
+    assert "token 2" in text
+
+
+def test_the_summary_counts_every_kind_of_token_once_per_column() -> None:
+    pii = PiiConfig(rules=[PiiRule(database="*", schema="dbo", table="t", columns=["prot"])])
+    text, _ = draft(
+        {
+            "A": [
+                table(
+                    "dbo",
+                    "t",
+                    col("a_email"),
+                    col("b_email2"),
+                    col("c_only"),
+                    col("d_only"),
+                    col("e_X"),
+                    col("e_x"),
+                    col("f_Y"),
+                    col("f_y"),
+                    col("prot"),
+                )
+            ],
+            "B": [
+                table(
+                    "dbo",
+                    "t",
+                    col("a_email"),
+                    col("b_email2"),
+                    col("e_X"),
+                    col("e_x"),
+                    col("f_Y"),
+                    col("f_y"),
+                    col("prot"),
+                )
+            ],
+        },
+        pii,
+    )
+
+    assert "# Summary: open 0, deny 0, key 0, token 6, protected 1" in text
+    assert "# protected by an existing rule: dbo.t.prot" in text
+    assert "# not listable: dbo.t.e_X, dbo.t.e_x, dbo.t.f_Y, dbo.t.f_y" in text
+    assert "# only in A: dbo.t.c_only" in text
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [(5, "d0, d1, d2, d3, d4"), (6, "d0, d1, d2, d3, d4, ... (+1 more)")],
+)
+def test_a_list_is_cut_only_after_five_names(count: int, expected: str) -> None:
+    databases = {f"d{i}": [table(None, "t", col("shared"), col("extra"))] for i in range(count)}
+    databases["zz"] = [table(None, "t", col("shared"))]
+
+    text, _ = draft(databases)
+
+    assert f"# only in {expected}: t.extra" in text
+
+
+def test_the_first_spelling_by_case_folded_order_wins_whatever_the_input_order() -> None:
+    first = table("dbo", "users", col("x"))
+    second = table("Dbo", "Users", col("x"))
+
+    for order in ([first, second], [second, first]):
+        _, loaded = draft({"A": order})
+        assert loaded["exposed_columns"] == [{"schema": "Dbo", "table": "Users", "columns": ["x"]}]
+
+
+def test_a_schema_called_xxxx_is_not_the_missing_schema() -> None:
+    _, loaded = draft({"A": [table(None, "t", col("x")), table("xxxx", "t", col("y"))]})
+
+    assert loaded["exposed_columns"] == [
+        {"table": "t", "columns": ["x"]},
+        {"schema": "xxxx", "table": "t", "columns": ["y"]},
+    ]
+
+
+def test_databases_are_listed_in_case_folded_order() -> None:
+    text, _ = draft({"B": [table(None, "t", col("x"))], "a": [table(None, "t", col("x"))]})
+
+    assert "# Reflected all 2 databases: a, B." in text
+
+
+def test_a_long_name_never_leaves_the_comment_block() -> None:
+    long_name = "T" + "x" * 200
+    text, _ = draft({"A": [table(None, long_name, col("Id", pk=True), col("OtherId"))]})
+
+    start = text.index("#   - ")
+    assert all(line.startswith("#") for line in text[start:].splitlines() if line)
+    assert long_name in text
+
+
+def test_a_skipped_schema_does_not_stop_or_reset_the_count() -> None:
+    text, loaded = draft(
+        {
+            "A": [
+                table(None, "a", col("email")),
+                table("a*b", "t", col("x"), col("y")),
+                table("dbo", "z", col("n")),
+            ]
+        }
+    )
+
+    assert loaded["exposed_columns"] == [{"schema": "dbo", "table": "z", "columns": ["n"]}]
+    assert "open 1, deny 0, key 0, token 3" in text
+
+
+def test_schemas_that_differ_only_by_case_resolve_to_the_same_spelling_in_any_order() -> None:
+    lower = table("dbo", "t", col("x"))
+    upper = table("Dbo", "t", col("x"))
+
+    for order in ([lower, upper], [upper, lower]):
+        _, loaded = draft({"A": order})
+        assert loaded["exposed_columns"] == [{"schema": "Dbo", "table": "t", "columns": ["x"]}]
+
+
+def test_names_that_differ_only_by_case_with_equal_columns_resolve_in_any_order() -> None:
+    lower = table("dbo", "users", col("x"))
+    upper = table("dbo", "Users", col("x"))
+
+    for order in ([lower, upper], [upper, lower]):
+        _, loaded = draft({"A": order})
+        assert loaded["exposed_columns"] == [{"schema": "dbo", "table": "Users", "columns": ["x"]}]

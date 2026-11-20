@@ -181,6 +181,8 @@ column is classified by a fixed, conservative rule, first match wins:
    the agent must join or sort by it. A key that names a person (patient, member, MRN) is a Safe
    Harbor identifier (R); see [`health-data.md`](health-data.md).
 4. **Offer to open** (`exposed_columns`): the remaining integer, decimal, float, and bool columns.
+   A numeric age column (for example `PatientAge`) can land here, and an age over 89 is a Safe
+   Harbor identifier (C): check such columns by hand.
 
 Tables are grouped by schema and name, ignoring case. A column is offered only if every reflected
 database that has the table has the column; a column found in only some is named in an

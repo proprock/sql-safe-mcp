@@ -29,8 +29,6 @@ Kind = Literal["deny", "token", "key", "open"]
 
 # A column whose name contains one of these is denied.
 DENY_NAME_PARTS: tuple[str, ...] = ("note", "comment", "memo", "attach", "photo")
-# A column whose name contains one of these stays a token. The one place to change that choice.
-TOKEN_NAME_PARTS: tuple[str, ...] = SUSPICIOUS_NAME_PARTS
 _TOKEN_TYPE_CLASSES: frozenset[TypeClass] = frozenset(
     {"string", "date", "datetime", "time", "uuid", "other"}
 )
@@ -60,7 +58,9 @@ def classify_column(column: ScaffoldColumn) -> Kind:
     folded = column.name.casefold()
     if column.type_class == "binary" or any(part in folded for part in DENY_NAME_PARTS):
         return "deny"
-    if column.type_class in _TOKEN_TYPE_CLASSES or any(part in folded for part in TOKEN_NAME_PARTS):
+    if column.type_class in _TOKEN_TYPE_CLASSES or any(
+        part in folded for part in SUSPICIOUS_NAME_PARTS
+    ):
         return "token"
     if column.primary_key or folded.endswith("id"):
         return "key"
@@ -247,7 +247,7 @@ def render_scaffold(alias: str, catalog: ScaffoldCatalog, pii: PiiConfig) -> str
     lines.extend(plan.only_in)
     lines.extend(f"# not listable: {item}" for item in plan.unlistable)
     if plan.protected:
-        lines.append(f"# protected by an existing rule: {', '.join(plan.protected)}")
+        lines.append(f"# protected by an existing rule: {_shown(plan.protected)}")
     if plan.entries["key"]:
         lines += [
             "# Key columns stay tokens. Open one only if the agent must join or sort by it.",
