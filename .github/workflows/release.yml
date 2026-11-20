@@ -40,7 +40,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
       - uses: astral-sh/setup-uv@v10.1.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.12", version: "0.13.7" }
       - run: uv sync --all-groups --locked
       - run: uv build
       - name: Verify clean package installs
@@ -172,7 +172,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
       - uses: astral-sh/setup-uv@v10.1.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.12", version: "0.13.7" }
       - run: uv build compat/sql-mini-mcp --out-dir dist-compat
       - name: Verify the wheel depends on sql-safe-mcp
         run: |
