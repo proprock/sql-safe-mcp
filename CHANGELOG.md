@@ -46,6 +46,13 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
   resolved against the configuration file's directory. On POSIX the file must be owned by the
   server user or root, with no access for others and no group write.
 
+### Changed
+
+- `sql-safe-mcp --verify-pii-rules` warns about more unprotected column names that look personal:
+  `fax`, `account`, `acct`, `license`, `licence`, `vin`, `plate`, `url`, `biometric`,
+  `fingerprint`, `insurance`, `policy`, `member`, `city`, `street`, `county`, and `date`. These are
+  hints only and never change the exit code. The list is in `docs/configuration.md`.
+
 ### Security
 
 - With `logging.level: DEBUG`, the MCP SDK no longer writes a malformed protocol message to

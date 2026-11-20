@@ -34,6 +34,23 @@ SUSPICIOUS_NAME_PARTS: tuple[str, ...] = (
     "device",
     "photo",
     "notes",
+    "fax",
+    "account",
+    "acct",
+    "license",
+    "licence",
+    "vin",
+    "plate",
+    "url",
+    "biometric",
+    "fingerprint",
+    "insurance",
+    "policy",
+    "member",
+    "city",
+    "street",
+    "county",
+    "date",
 )
 
 # database -> [(schema, table, column names)]
