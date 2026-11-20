@@ -17,6 +17,15 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ### Security
 
+- Redaction of driver messages in the logs no longer lets an apostrophe inside a word ("Can't",
+  "users'", "d'ouvrir", "dell'utente") shift the quote pairs. Before, a quoted value after such a
+  word, such as the host in the MySQL error 2003 message `Can't connect to MySQL server on '<host>'`
+  or a database name in a French or Italian message, was logged unmasked. An apostrophe between two
+  word characters is not a quote (a capital `N'` still opens a T-SQL literal), and a quoted span now
+  runs from the first quote to the last matching one, so when a quote is misread, the text between
+  values is masked too instead of a value being left in clear (`Duplicate entry 'a' for key 'k'` is
+  logged as `Duplicate entry '***'`). An unmatched quote, such as a value cut off by the driver
+  (`Unknown database 'Billing`), masks the rest of the message.
 - Every log line that names the `database` argument (`connect ok`, `connect failed`,
   `engine created`, `engine evicted`, `operation ok`, `operation failed`) now writes it as a single
   sanitized field, as the audit line already did: characters other than letters, digits, `_`, `.`,

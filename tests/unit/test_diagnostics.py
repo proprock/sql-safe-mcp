@@ -84,10 +84,11 @@ def test_describe_error_redacts_short_usernames_only_as_whole_words() -> None:
         ("Conversion failed for value 'john@x.com'", "Conversion failed for value '***'"),
         ("Invalid value N'john@x.com' here", "Invalid value N'***' here"),
         ('Bad value "john@x.com" here', 'Bad value "***" here'),
-        ("Duplicate entry 'a@x.com' for key 'email' ", "Duplicate entry '***' for key '***'"),
+        # Greedy span: the text between two values is masked with them (documented behavior).
+        ("Duplicate entry 'a@x.com' for key 'email' ", "Duplicate entry '***'"),
         ("Cannot convert 1234567890 to int", "Cannot convert *** to int"),
         ("Cannot convert 12345 to int", "Cannot convert 12345 to int"),
-        ("Value 'it''s' bad", "Value '***''***' bad"),
+        ("Value 'it''s' bad", "Value '***' bad"),
     ],
 )
 def test_describe_error_redacts_quoted_literals_and_long_digit_runs(
@@ -113,6 +114,99 @@ def test_describe_error_bounds_only_word_character_edges_of_a_secret(
     line = describe_error(RuntimeError(message), ((secret, "***"),))
 
     assert line == f"RuntimeError message={expected}"
+
+
+def test_describe_error_masks_the_host_in_the_real_pymysql_2003_message() -> None:
+    # pymysql: "Can't connect to MySQL server on %r (%s)". The apostrophe in "Can't" is not a quote.
+    error = _wrapped(
+        _MySqlError(2003, "Can't connect to MySQL server on 'db.internal' ([Errno 111] refused)")
+    )
+
+    assert describe_error(error, ()) == (
+        "_MySqlError code=2003 message=Can't connect to MySQL server on '***' ([Errno 111] refused)"
+    )
+    redactions = secrets_for("mysql+pymysql://u:p@db.internal/shop", "shop")
+    assert describe_error(error, redactions) == (
+        "_MySqlError code=2003 message=Can't connect to MySQL server on '***' ([Errno 111] refused)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        # Real MySQL formats (errors 1146 and 1008): a contraction, then quoted names.
+        ("Table 'shop.users' doesn't exist", "Table '***' doesn't exist"),
+        (
+            "Can't drop database 'Billing'; database doesn't exist",
+            "Can't drop database '***'; database doesn't exist",
+        ),
+    ],
+)
+def test_real_mysql_messages_with_a_contraction_mask_the_quoted_names(
+    message: str, expected: str
+) -> None:
+    assert describe_error(RuntimeError(message), ()) == f"RuntimeError message={expected}"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        # Synthetic (not captured from a server): elision, as in the language of the login.
+        (
+            "Impossible d'ouvrir la base de données 'Billing' pour l'utilisateur 'bob'.",
+            "Impossible d'ouvrir la base de données '***'.",
+        ),
+        (
+            "Impossibile accedere al database dell'utente 'Billing'.",
+            "Impossibile accedere al database dell'utente '***'.",
+        ),
+        # Plural possessive: the trailing apostrophe is ambiguous, so it over-masks.
+        ("The users' database 'Billing' is offline.", "The users'***' is offline."),
+        # A capitalized N opens a T-SQL literal; a lowercase n' is French elision.
+        ("N'a@x.com' is bad", "N'***' is bad"),
+        ("Il n'existe pas de base 'Billing'", "Il n'existe pas de base '***'"),
+    ],
+)
+def test_an_apostrophe_inside_a_word_never_exposes_a_quoted_value(
+    message: str, expected: str
+) -> None:
+    assert describe_error(RuntimeError(message), ()) == f"RuntimeError message={expected}"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("'secret' failed", "'***' failed"),
+        ('ab"cd"ef', 'ab"***"ef'),
+        ("\"x\" and 'y'", "\"***\" and '***'"),
+        ("a 'x' b \"y\" c 'z' d", "a '***' d"),
+        ("'it's", "'***"),
+        ("a lone ' quote", "a lone '***"),
+        ('a lone " quote', 'a lone "***'),
+        ("x 'a' and UN'b' and N'c'", "x '***'"),
+        ("UN'b' ok", "UN'b'***"),
+        ("Unknown database 'Billing", "Unknown database '***"),
+        # Over-masking by design: a false opener costs the tail of the message, never a value.
+        ("The users' database Billing is offline", "The users'***"),
+        ("ok 'a' then \"b", "ok '***' then \"***"),
+    ],
+    ids=[
+        "quote-at-start",
+        "double-quote-between-words",
+        "two-kinds",
+        "greedy-across-a-double-quoted-span",
+        "unmatched-apostrophe-in-word",
+        "lone-apostrophe",
+        "lone-double-quote",
+        "greedy-over-n-prefix",
+        "n-inside-a-word",
+        "truncated-value",
+        "false-opener-masks-the-tail",
+        "unmatched-after-a-span",
+    ],
+)
+def test_quoted_span_edges(message: str, expected: str) -> None:
+    assert describe_error(RuntimeError(message), ()) == f"RuntimeError message={expected}"
 
 
 def test_describe_error_can_omit_the_message() -> None:
