@@ -39,7 +39,14 @@ Residual disclosure, by design:
 - row order: without `ORDER BY`, rows arrive in the database's own order, which can follow an
   index on a protected column;
 - counts: `runtime.min_count_cell` hides small `COUNT(*)` values but not the difference between
-  two overlapping queries.
+  two overlapping queries;
+- NULL: `NULL` is not tokenized, so a projected protected column shows whether the value is
+  missing. For a date such as a date of death, that is information. `IS NULL` on a protected
+  column is refused in `WHERE`, but the projection still reveals it;
+- frequency: `WHERE col = <token>` with `COUNT(*)` gives the number of rows per value. For a column
+  with few values (sex, diagnosis, HIV status, insurance category), that distribution can reveal
+  the value without the key. The only current control is `pii.deny` for that column. A per-column
+  option that removes equality is planned (HS-07) and is not implemented.
 
 SQL validation is an allowlist. Unknown syntax, cross-database names, unresolved tables or columns,
 unsupported lineage, and unsupported protected-value types fail closed. Every node type is also
