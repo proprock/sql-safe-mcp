@@ -95,8 +95,14 @@ class PiiScopeRule(PiiRule):
 def _check_column_wildcards(
     rules: list[PiiRule], exposed: list[PiiScopeRule], deny: list[PiiScopeRule]
 ) -> None:
-    if any("*" in column for rule in [*rules, *exposed] for column in rule.columns):
-        raise ValueError("pii rules and exposed_columns cannot list '*' columns; only deny can")
+    if any("*" in column for rule in rules for column in rule.columns):
+        raise ValueError("pii rules cannot list '*' columns; only exposed_columns and deny can")
+    if any("*" in column and rule.columns != ["*"] for rule in exposed for column in rule.columns):
+        raise ValueError("an exposed_columns column wildcard must be exactly ['*']")
+    if any(rule.columns == ["*"] and not rule.table.strip("*") for rule in exposed):
+        raise ValueError(
+            "an exposed_columns entry cannot open every column of every table; use mode: protect"
+        )
     if any("*" in column and rule.columns != ["*"] for rule in deny for column in rule.columns):
         raise ValueError("a deny column wildcard must be exactly ['*']")
 

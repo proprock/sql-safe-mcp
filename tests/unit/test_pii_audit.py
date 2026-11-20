@@ -182,3 +182,71 @@ def test_ordinary_column_names_do_not_look_personal(column: str) -> None:
     text, _, _ = _audit_columns(pii, column)
 
     assert "looks personal" not in text
+
+
+def test_a_star_exposed_entry_warns_that_it_opens_columns_added_later() -> None:
+    text, unmatched = _audit(
+        {
+            "mode": "deny-by-default",
+            "exposed_columns": [{"database": "clinic", "table": "[av]*", "columns": ["*"]}],
+        }
+    )
+
+    assert "clinic: exposed clinic.[av]*(*) matched 2 table(s), 6 column(s)" in text
+    assert (
+        "WARNING: clinic: exposed clinic.[av]*(*) opens every column of 2 table(s), "
+        "including columns added later"
+    ) in text
+    assert unmatched == 0
+
+
+def test_a_star_exposed_entry_without_a_match_is_unmatched_and_has_no_opening_warning() -> None:
+    text, unmatched = _audit(
+        {
+            "mode": "deny-by-default",
+            "exposed_columns": [{"database": "clinic", "table": "Ref_*", "columns": ["*"]}],
+        }
+    )
+
+    assert "WARNING: clinic: exposed clinic.Ref_*(*) matches no table or column" in text
+    assert "opens every column" not in text
+    assert unmatched == 1
+
+
+def test_a_named_exposed_entry_and_a_star_deny_entry_do_not_warn_about_opening() -> None:
+    text, _ = _audit(
+        {
+            "mode": "deny-by-default",
+            "exposed_columns": [{"database": "clinic", "table": "visits", "columns": ["id"]}],
+            "deny": [{"database": "clinic", "table": "attachments", "columns": ["*"]}],
+        }
+    )
+
+    assert "opens every column" not in text
+
+
+def test_the_name_advisor_still_checks_columns_opened_by_a_star_entry() -> None:
+    text, _ = _audit(
+        {
+            "mode": "deny-by-default",
+            "exposed_columns": [{"database": "clinic", "table": "visits", "columns": ["*"]}],
+            "deny": [{"database": "clinic", "table": "visits", "columns": ["visit_notes"]}],
+        }
+    )
+
+    assert "unprotected column looks personal: clinic.visits.email" in text
+    assert "clinic.visits.visit_notes" not in text
+    assert "clinic.attachments" not in text
+
+
+def test_every_entry_that_matches_nothing_is_counted() -> None:
+    _, unmatched = _audit(
+        {
+            "mode": "deny-by-default",
+            "exposed_columns": [{"database": "clinic", "table": "Ref_*", "columns": ["*"]}],
+            "deny": [{"database": "clinic", "table": "nothing", "columns": ["x"]}],
+            "rules": [{"database": "clinic", "table": "none", "columns": ["y"]}],
+        }
+    )
+
+    assert unmatched == 3

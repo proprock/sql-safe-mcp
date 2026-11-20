@@ -498,3 +498,48 @@ def test_deny_by_default_deny_wins_over_exposed_columns() -> None:
 
 def test_count_star_does_not_reference_denied_columns() -> None:
     assert evaluate_deny("SELECT COUNT(*) FROM Contacts").protected == (False,)
+
+
+STAR_CONFIG = PiiConfig(
+    mode="deny-by-default",
+    exposed_columns=[PiiScopeRule(table="Users", columns=["*"])],
+)
+
+
+def test_a_star_exposed_entry_opens_every_column_of_its_table_only() -> None:
+    assert evaluate_deny("SELECT Id, Email, Name FROM Users", STAR_CONFIG).protected == (
+        False,
+        False,
+        False,
+    )
+    assert evaluate_deny("SELECT Total FROM Orders", STAR_CONFIG).protected == (True,)
+    assert evaluate_deny("SELECT * FROM Users", STAR_CONFIG).protected == (False,) * 4
+
+
+def test_a_deny_entry_wins_over_a_star_exposed_entry() -> None:
+    config = PiiConfig(
+        mode="deny-by-default",
+        exposed_columns=[PiiScopeRule(table="Users", columns=["*"])],
+        deny=[PiiScopeRule(table="Users", columns=["Phone"])],
+    )
+    with pytest.raises(DomainError) as info:
+        evaluate_deny("SELECT Phone FROM Users", config)
+    assert Reason.COLUMN_DENIED.value in info.value.public_message
+    assert evaluate_deny("SELECT Id, Email FROM Users", config).protected == (False, False)
+
+
+def test_a_protection_rule_wins_over_a_star_exposed_entry() -> None:
+    config = PiiConfig(
+        mode="deny-by-default",
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        exposed_columns=[PiiScopeRule(table="Users", columns=["*"])],
+    )
+    assert evaluate_deny("SELECT Id, Email FROM Users", config).protected == (False, True)
+
+
+def test_a_star_exposed_entry_changes_nothing_in_protect_mode() -> None:
+    config = PiiConfig(
+        rules=[PiiRule(database="*", table="Users", columns=["Email"])],
+        exposed_columns=[PiiScopeRule(table="Users", columns=["*"])],
+    )
+    assert evaluate_deny("SELECT Id, Email FROM Users", config).protected == (False, True)

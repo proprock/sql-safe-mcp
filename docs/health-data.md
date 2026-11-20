@@ -103,6 +103,8 @@ Two points often missed:
       (the [strict template](../sql-safe-mcp.example-strict.yaml) shows the shape).
       `sql-safe-mcp --scaffold-pii ALIAS` drafts both lists from the schema; the draft is a
       suggestion, so review every column in it.
+      Use `columns: ["*"]` in `exposed_columns` only for reference tables with no personal data:
+      a column added later is open at once.
 - [ ] `pii.deny` for free text, attachments, and photos.
 - [ ] `pii.rules` with one `domain` per entity (patient, guardian, clinical).
 - [ ] Dates of birth, ZIP codes, schools, and guardian names protected like names.

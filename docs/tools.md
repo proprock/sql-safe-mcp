@@ -61,7 +61,8 @@ reference and is rejected, and `TIME` results beyond 24 hours are not supported.
   against tokens issued for the same server alias. Plaintext comparison, `ORDER BY`, join keys,
   functions, and arithmetic on protected columns are rejected.
 - A server with `pii.mode: deny-by-default` treats every column not listed in
-  `pii.exposed_columns` as protected, so `SELECT *` returns tokens for those columns. A column in
+  `pii.exposed_columns` (`columns: ["*"]` lists every column of a table) as protected, so
+  `SELECT *` returns tokens for those columns. A column in
   `pii.deny` cannot be referenced anywhere; the query is rejected with `QUERY_REJECTED` and the
   reason "a denied column cannot be referenced".
 - Protected cells are returned as `pii:v1:...` tokens; `NULL` stays `null`. A malformed, tampered,

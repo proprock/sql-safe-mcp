@@ -520,7 +520,16 @@ and the reason "a denied column cannot be referenced". `deny` wins over `rules` 
 
 `exposed_columns` and `deny` entries use the `database`, `schema`, `table`, and `columns` keys
 described above, except that `database` is optional and defaults to `"*"`. `columns: ["*"]` is
-allowed only in `deny` and denies every column of the matching tables. A server using
+allowed in `deny`, where it denies every column of the matching tables, and in `exposed_columns`,
+where it opens every column of the matching tables; `*` anywhere else in `columns` (`["a*"]`,
+`["*", "b"]`) is a startup error, and `pii.rules` never accept it. Use `["*"]` in
+`exposed_columns` only for reference tables that hold no personal data, for example
+`{table: "Ref_*", columns: ["*"]}`: a column added to such a table later is open at once. An
+entry whose `table` is only `*` with `columns: ["*"]` is a startup error, because it would turn
+`deny-by-default` into `protect` under another name; use `mode: protect` instead.
+`--verify-pii-rules` prints `WARNING: ... opens every column of N table(s), including columns
+added later` for each such entry and still checks every opened column by name. A `deny` or
+`pii.rules` entry on a column wins over the `["*"]` entry. A server using
 `deny-by-default` must be `all_pii_safe`. `include`d shared sets contribute `rules`,
 `exposed_columns`, and `deny` in the same order as `rules`; `mode` is set per alias only.
 
