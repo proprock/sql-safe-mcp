@@ -497,6 +497,14 @@ Optional, under `runtime:`. A value outside its range is a startup error.
 The last four bound the SQL accepted by `execute_sql`; a query at the limit is accepted and one
 above it is rejected.
 
+`statement_timeout_seconds` is enforced by the database server for MySQL (`max_execution_time`)
+and MariaDB (`max_statement_time`), so the query stops running when the limit is reached; the
+client read timeout is 5 seconds longer and only covers a server that stops answering. SQL Server
+uses the ODBC query timeout. A MySQL or MariaDB server without those variables is not supported:
+the connection fails, and `engine: mysql` against a MariaDB server (or the reverse) fails with a
+`CONFIG_ERROR` that names the `engine` to set. Optimizer hints and `SET STATEMENT` cannot raise
+the limit: `execute_sql` strips comments and accepts only `SELECT`.
+
 ## Logging
 
 Optional, under `logging:`. The server writes to stderr only, using the standard `logging` module;

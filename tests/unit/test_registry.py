@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 from unittest.mock import Mock
 
+import pymysql.err
 import pytest
 from pydantic import SecretStr
 
@@ -239,11 +240,146 @@ def test_registry_passes_pymysql_timeouts_as_connect_args(
 
     EngineRegistry(config).get("one", "tenant")
 
+    # The client gives up 5 s after the server limit, so the server aborts the query first.
     assert create.call_args.kwargs["connect_args"] == {
         "connect_timeout": 10,
-        "read_timeout": 30,
+        "read_timeout": 35,
         "write_timeout": 30,
     }
+
+
+def _connect_callbacks(
+    monkeypatch: pytest.MonkeyPatch, engine: Literal["mysql", "mariadb", "sqlserver"]
+) -> list[Callable[..., None]]:
+    callbacks: list[Callable[..., None]] = []
+
+    def listens_for(_engine: object, event_name: str) -> Callable[..., object]:
+        def decorate(callback: Callable[..., None]) -> Callable[..., None]:
+            if event_name == "connect":
+                callbacks.append(callback)
+            return callback
+
+        return decorate
+
+    monkeypatch.setattr("sql_safe_mcp.db.registry.create_engine", Mock(return_value=Mock()))
+    monkeypatch.setattr("sql_safe_mcp.db.registry.event.listens_for", listens_for)
+    url = "mysql+pymysql://u:p@one/app" if engine != "sqlserver" else "mssql+pyodbc://u:p@one/app"
+    config = AppConfig(
+        version=1,
+        servers={"one": ServerConfig(engine=engine, connection_url=SecretStr(url))},
+        runtime=RuntimeConfig(statement_timeout_seconds=7),
+    )
+    EngineRegistry(config).get("one", "tenant")
+    return callbacks
+
+
+@pytest.mark.parametrize(
+    ("engine", "variable", "value"),
+    [("mysql", "max_execution_time", 7000), ("mariadb", "max_statement_time", 7)],
+)
+def test_mysql_sessions_get_a_server_side_statement_limit_in_the_engine_unit(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: Literal["mysql", "mariadb"],
+    variable: str,
+    value: int,
+) -> None:
+    cursor = Mock()
+    cursor.fetchone.return_value = ("STRICT_TRANS_TABLES",)
+    connection = Mock()
+    connection.cursor.return_value = cursor
+
+    for callback in _connect_callbacks(monkeypatch, engine):
+        callback(connection, None)
+
+    cursor.execute.assert_any_call(f"SET SESSION {variable} = %s", (value,))
+
+
+def test_sqlserver_sessions_set_no_server_side_statement_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = Mock(timeout=0)
+
+    for callback in _connect_callbacks(monkeypatch, "sqlserver"):
+        callback(connection, None)
+
+    connection.cursor.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [pymysql.err.MySQLError(), pymysql.err.OperationalError(1064, "syntax")],
+    ids=["no-args", "other-code"],
+)
+def test_other_driver_errors_on_the_limit_statement_propagate_unchanged(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    cursor = Mock()
+    cursor.fetchone.return_value = ("STRICT_TRANS_TABLES",)
+
+    def execute(sql: str, *_: object) -> None:
+        if "_time" in sql:
+            raise failure
+
+    cursor.execute.side_effect = execute
+    connection = Mock()
+    connection.cursor.return_value = cursor
+
+    with pytest.raises(pymysql.err.MySQLError) as raised:
+        for callback in _connect_callbacks(monkeypatch, "mysql"):
+            callback(connection, None)
+
+    assert raised.value is failure
+    cursor.close.assert_called()
+
+
+@pytest.mark.parametrize(
+    ("engine", "other"), [("mysql", "mariadb"), ("mariadb", "mysql")], ids=["mysql", "mariadb"]
+)
+def test_the_wrong_engine_setting_names_the_fix(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: Literal["mysql", "mariadb"],
+    other: str,
+) -> None:
+    cursor = Mock()
+    cursor.fetchone.return_value = ("STRICT_TRANS_TABLES",)
+
+    def execute(sql: str, *_: object) -> None:
+        if "_time" in sql:
+            raise pymysql.err.OperationalError(1193, "Unknown system variable 'secret-looking'")
+
+    cursor.execute.side_effect = execute
+    connection = Mock()
+    connection.cursor.return_value = cursor
+
+    with pytest.raises(DomainError) as raised:
+        for callback in _connect_callbacks(monkeypatch, engine):
+            callback(connection, None)
+
+    assert raised.value.code is ErrorCode.CONFIG_ERROR
+    assert f"engine: {other}" in str(raised.value)
+    assert f"engine: {engine}" in str(raised.value)
+    assert "secret-looking" not in str(raised.value)
+    cursor.close.assert_called()
+
+
+def test_a_server_without_the_statement_limit_variable_fails_the_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = Mock()
+    cursor.fetchone.return_value = ("STRICT_TRANS_TABLES",)
+    cursor.execute.side_effect = lambda sql, *_: (
+        (_ for _ in ()).throw(RuntimeError("Unknown system variable"))
+        if "max_execution_time" in sql
+        else None
+    )
+    connection = Mock()
+    connection.cursor.return_value = cursor
+
+    with pytest.raises(RuntimeError, match="Unknown system variable"):
+        for callback in _connect_callbacks(monkeypatch, "mysql"):
+            callback(connection, None)
+
+    cursor.close.assert_called()
 
 
 def test_registry_removes_no_backslash_escapes_from_mysql_sessions(
@@ -282,7 +418,8 @@ def test_registry_removes_no_backslash_escapes_from_mysql_sessions(
     cursor.execute.assert_any_call(
         "SET SESSION sql_mode = %s", ("ANSI_QUOTES,STRICT_TRANS_TABLES",)
     )
-    cursor.close.assert_called_once_with()
+    # One cursor for this listener and one for the server statement limit listener.
+    assert cursor.close.call_count == 2
 
 
 class _ConnectFailure(Exception):

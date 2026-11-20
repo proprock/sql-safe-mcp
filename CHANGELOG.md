@@ -15,6 +15,17 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
   `deceased`. These are hints only and never change the exit code. The full list is in
   `docs/configuration.md`.
 
+### Fixed
+
+- `statement_timeout_seconds` now stops the query on the server for MySQL and MariaDB. Before, the
+  client dropped the connection after the limit but the server kept running the query (it stayed
+  in `information_schema.PROCESSLIST` for seconds after the `TIMEOUT` error). Each session now sets
+  `max_execution_time` (MySQL) or `max_statement_time` (MariaDB), the client read timeout is 5
+  seconds longer than the limit, and the abort errors (MySQL 3024, MariaDB 1969) map to `TIMEOUT`.
+  A server that lacks the variable fails the connection instead of running without a limit. In
+  particular, a configuration with `engine: mysql` pointed at a MariaDB server (or the reverse),
+  which used to work, now fails with `CONFIG_ERROR` and the hint to set the matching `engine`.
+
 ### Security
 
 - Redaction of driver messages in the logs no longer lets an apostrophe inside a word ("Can't",

@@ -179,6 +179,14 @@ def live_server(engine: Engine) -> Iterator[LiveMySql]:
             f"INSERT INTO `{sql_database}`.`canary` VALUES (1), (2), (3)",
             f"CREATE TABLE `{sql_database}`.`visits` (id INT PRIMARY KEY, hits INT NOT NULL)",
             f"INSERT INTO `{sql_database}`.`visits` VALUES (1, 424242), (2, 515151)",
+            # 4096 rows for a query that outlives the statement timeout on purpose.
+            f"CREATE TABLE `{sql_database}`.`big` (id INT PRIMARY KEY)",
+            f"INSERT INTO `{sql_database}`.`big` VALUES (1)",
+            *(
+                f"INSERT INTO `{sql_database}`.`big` "
+                f"SELECT id + {2**step} FROM `{sql_database}`.`big`"
+                for step in range(12)
+            ),
         ]
         people = f"INSERT INTO `{sql_database}`.`people` (id, name, email) VALUES (%s, %s, %s)"
         setup += [
@@ -238,7 +246,33 @@ def live_server(engine: Engine) -> Iterator[LiveMySql]:
             other_key=other_key,
         )
     finally:
+        # A query that outlives its test would hold a metadata lock and hang DROP DATABASE.
+        kill_running_queries(admin_url, sql_database)
         _run(admin_url, cleanup)
+
+
+def running_queries(url: URL, database: str) -> list[int]:
+    engine = create_engine(url)
+    try:
+        raw = engine.raw_connection()
+        try:
+            cursor = raw.cursor()
+            cursor.execute(
+                "SELECT ID FROM information_schema.PROCESSLIST "
+                "WHERE DB = %s AND COMMAND = 'Query' AND ID <> CONNECTION_ID()",
+                (database,),
+            )
+            return [int(row[0]) for row in cursor.fetchall()]
+        finally:
+            raw.close()
+    finally:
+        engine.dispose()
+
+
+def kill_running_queries(url: URL, database: str) -> None:
+    ids = running_queries(url, database)
+    if ids:
+        _run(url, [f"KILL QUERY {query_id}" for query_id in ids])
 
 
 @pytest.fixture(scope="module", params=["mysql", "mariadb"])

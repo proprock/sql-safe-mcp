@@ -305,6 +305,9 @@ class _ArglessOrig:
     ("orig", "expected"),
     [
         (_PyMySqlFailure(-2, "localized error"), ErrorCode.TIMEOUT),
+        # Server-side limits: MySQL max_execution_time and MariaDB max_statement_time.
+        (_PyMySqlFailure(3024, "localized error"), ErrorCode.TIMEOUT),
+        (_PyMySqlFailure(1969, "localized error"), ErrorCode.TIMEOUT),
         (_OpaqueFailure("query timeout expired"), ErrorCode.TIMEOUT),
         (_OpaqueFailure("state hyt00 seen"), ErrorCode.TIMEOUT),
         (_OpaqueFailure("state hyt01 seen"), ErrorCode.TIMEOUT),
@@ -321,6 +324,8 @@ class _ArglessOrig:
     ],
     ids=[
         "native-timeout-only",
+        "mysql-max-execution-time",
+        "mariadb-max-statement-time",
         "text-timeout",
         "text-hyt00",
         "text-hyt01",

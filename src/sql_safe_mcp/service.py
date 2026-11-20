@@ -48,7 +48,8 @@ _SCHEMA_CACHE_TTL_SECONDS = 300.0
 _TIMEOUT_SQLSTATES = frozenset({"HYT00", "HYT01"})
 _CONNECTION_SQLSTATES = frozenset({"08001", "08004"})
 _ACCESS_DENIED_SQLSTATES = frozenset({"28000"})
-_TIMEOUT_NATIVE_CODES = frozenset({-2})
+# -2: ODBC/pymysql client timeout; 3024: MySQL max_execution_time; 1969: MariaDB max_statement_time.
+_TIMEOUT_NATIVE_CODES = frozenset({-2, 1969, 3024})
 _CONNECTION_NATIVE_CODES = frozenset({1049, 2003, 4060})
 _ACCESS_DENIED_NATIVE_CODES = frozenset({229, 1044, 1045, 18456})
 T = TypeVar("T")
