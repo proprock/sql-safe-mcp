@@ -38,6 +38,12 @@ class Session:
         assert isinstance(content, TextContent)
         return content.text
 
+    @property
+    def stderr_flat(self) -> str:
+        # Rich wraps log lines at the terminal width, so a secret or reference can be split
+        # across lines. Searching the whitespace-free form too closes that false-green gap.
+        return re.sub(r"\s+", "", self.stderr)
+
 
 @contextmanager
 def _refused_port() -> Iterator[int]:
@@ -100,9 +106,12 @@ def test_unreachable_database_is_a_tool_error_not_a_protocol_failure(session: Se
 
 def test_error_text_and_stderr_never_contain_the_password_or_host(session: Session) -> None:
     tool_text = session.tables_text()
+    tool_flat = re.sub(r"\s+", "", tool_text)
     for leaked in (PASSWORD, HOST):
         assert leaked not in tool_text
+        assert leaked not in tool_flat
         assert leaked not in session.stderr
+        assert leaked not in session.stderr_flat
 
 
 def test_stderr_records_this_failed_call_with_its_reference(session: Session) -> None:
@@ -110,7 +119,6 @@ def test_stderr_records_this_failed_call_with_its_reference(session: Session) ->
     # Rich wraps log lines, so whitespace is normalised before looking for the reference.
     match = REFERENCE.search(session.tables_text())
     assert match is not None
-    flat = re.sub(r"\s+", "", session.stderr)
-    assert match.group(1) in flat
-    assert "code=CONNECTION_FAILED" in flat
-    assert "operation=list_tables" in flat
+    assert match.group(1) in session.stderr_flat
+    assert "code=CONNECTION_FAILED" in session.stderr_flat
+    assert "operation=list_tables" in session.stderr_flat
