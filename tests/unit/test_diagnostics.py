@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 
-from sql_safe_mcp.diagnostics import configure_logging, describe_error, secrets_for
+from sql_safe_mcp.diagnostics import configure_logging, describe_error, log_field, secrets_for
 
 
 class _OdbcError(Exception):
@@ -135,6 +135,20 @@ def test_describe_error_removes_control_characters_and_truncates() -> None:
     assert line.endswith("...")
 
 
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029", "\x9f", "\x0b", "\x0c"])
+def test_describe_error_replaces_every_line_separator_outside_quotes(separator: str) -> None:
+    forged = f"Unknown database x{separator}INFO audit server=s database=app{separator}row_count=0"
+
+    line = describe_error(RuntimeError(forged), ())
+
+    assert len(line.splitlines()) == 1
+    assert separator not in line
+    assert (
+        line
+        == "RuntimeError message=Unknown database x INFO audit server=s database=app row_count=0"
+    )
+
+
 def test_describe_error_redacts_the_longest_secret_first() -> None:
     message = "connect a.b.c failed"
     redactions = (("b.c", "short"), ("a.b.c", "***"))
@@ -221,3 +235,22 @@ def test_configure_logging_keeps_the_audit_trail_below_a_quiet_package_level() -
     configure_logging("ERROR")
     assert not audit.isEnabledFor(logging.INFO)
     configure_logging("INFO")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Billing_2.sales$#@-x", "Billing_2.sales$#@-x"),
+        ("a b", "a?b"),
+        ("x\naudit server=s database=app", "x?audit?server?s?database?app"),
+        ("a\rb\tc", "a?b?c"),
+        ("a=b", "a?b"),
+        ("Ünï", "Ünï"),
+        ("", "-"),
+        (None, "-"),
+    ],
+)
+def test_log_field_keeps_names_on_one_field_and_maps_none_to_a_dash(
+    value: str | None, expected: str
+) -> None:
+    assert log_field(value) == expected

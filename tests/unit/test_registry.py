@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import Mock
 
 import pytest
@@ -14,6 +14,70 @@ from pydantic import SecretStr
 from sql_safe_mcp.config import AppConfig, RuntimeConfig, ServerConfig
 from sql_safe_mcp.db.registry import EngineRegistry
 from sql_safe_mcp.errors import DomainError, ErrorCode
+
+HOSTILE_DATABASE = "x\naudit server=s database=app row_count=0\r"
+
+
+def _assert_one_safe_line_each(caplog: pytest.LogCaptureFixture) -> None:
+    assert caplog.records
+    for record in caplog.records:
+        message = record.getMessage()
+        assert "\n" not in message
+        assert "\r" not in message
+        assert not message.startswith("audit ")
+    assert "database=x?audit?server?s?database?app?row_count?0?" in caplog.text
+
+
+def test_connect_log_lines_sanitize_the_database(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("sql_safe_mcp.db.registry.create_engine", Mock())
+    listeners: dict[str, Callable[..., Any]] = {}
+
+    def listens_for(_target: object, name: str) -> Callable[[Callable[..., Any]], Any]:
+        def register(function: Callable[..., Any]) -> Callable[..., Any]:
+            listeners[name] = function
+            return function
+
+        return register
+
+    monkeypatch.setattr("sql_safe_mcp.db.registry.event.listens_for", listens_for)
+    EngineRegistry(_config()).get("one", HOSTILE_DATABASE)
+    dialect = Mock()
+    caplog.set_level(logging.INFO, logger="sql_safe_mcp")
+
+    listeners["do_connect"](dialect, Mock(), ("dsn",), {})
+    dialect.connect.side_effect = _ConnectFailure("28000", "[28000] Login failed")
+    with pytest.raises(_ConnectFailure):
+        listeners["do_connect"](dialect, Mock(), ("dsn",), {})
+
+    assert [r.getMessage().split(" server=")[0] for r in caplog.records] == [
+        "connect ok",
+        "connect failed",
+    ]
+    _assert_one_safe_line_each(caplog)
+
+
+def test_engine_creation_and_eviction_log_lines_sanitize_the_database(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("sql_safe_mcp.db.registry.create_engine", Mock())
+    monkeypatch.setattr("sql_safe_mcp.db.registry.event.listens_for", lambda *_args: lambda fn: fn)
+    registry = EngineRegistry(_config(cache_size=1))
+    caplog.set_level(logging.DEBUG, logger="sql_safe_mcp")
+
+    registry.get("one", HOSTILE_DATABASE)
+    registry.get("one", "other")
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert [m.split(" server=")[0] for m in messages] == [
+        "engine created",
+        "engine created",
+        "engine evicted",
+    ]
+    for message in messages[:1] + messages[2:]:
+        assert "\n" not in message and "\r" not in message
+        assert "database=x?audit?server?s?database?app?row_count?0?" in message
 
 
 def _config(cache_size: int = 1, concurrency: int = 8) -> AppConfig:
