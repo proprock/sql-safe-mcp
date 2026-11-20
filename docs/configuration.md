@@ -1,7 +1,7 @@
 # Configuration
 
 Connection topology lives in a YAML file. Secrets live in the process environment and are pulled in
-with `${NAME}` placeholders. Three complete, commented templates are available. Copy one to
+with `${NAME}` placeholders. Five complete, commented templates are available. Copy one to
 `sql-safe-mcp.yaml` and replace only its environment-variable names; never put a URL, credential,
 or PII key into the file.
 
@@ -10,11 +10,14 @@ or PII key into the file.
 | [simple](../sql-safe-mcp.example-simple.yaml) | You need one SQL Server instance and schema metadata only. | One `metadata` alias, with no PII or logging settings. |
 | [multi](../sql-safe-mcp.example-multi.yaml) | You need several independent instances and local PII policies. | SQL Server and MySQL aliases; every PII rule is built into its alias. |
 | [shared](../sql-safe-mcp.example-shared.yaml) | Several PII-safe aliases need reusable policies or you need explicit operating limits. | Shared default/named PII sets, local additions, all runtime limits, and logging. |
+| [strict](../sql-safe-mcp.example-strict.yaml) | One policy must run unchanged in QA and production. | One `main` alias that reads its URL and key from environment variables; a deny-by-default named policy. |
+| [qa-open](../sql-safe-mcp.example-qa-open.yaml) | QA users explore de-identified data beside the strict alias. Never deploy it where production data is reachable. | A second server process with a `protect` policy that denies free text only. |
 
 ## Complete examples
 
-All three templates comment each selected setting and identify the allowed choice when the setting
-uses a fixed set of values. They are valid independent starting points, not fragments to combine.
+All five templates comment each selected setting and identify the allowed choice when the setting
+uses a fixed set of values. Each is a valid independent starting point. The strict and qa-open
+templates are meant to be used together; see [one policy, two environments](#one-policy-two-environments).
 
 ### Simple: one metadata-only server
 
@@ -36,6 +39,78 @@ MariaDB reject `schema` in PII rules. Each PII-safe alias names a different envi
 template. Its unnamed shared group applies to every PII-safe alias, while `users_pii` applies only
 where the exact name appears in `pii.include`. The file also shows the complete runtime-limit set,
 their accepted ranges, the allowed log levels, and local rules that are added after shared ones.
+
+### One policy, two environments
+
+[`sql-safe-mcp.example-strict.yaml`](../sql-safe-mcp.example-strict.yaml) holds the whole PII
+policy once. The same file, unchanged, runs in QA and in production. The environment selects the
+database and the key: `connection_url: "${MAIN_SQL_URL}"` comes from an environment variable, and
+`pii_key_file: /run/secrets/main_pii_key` points at a secret that each environment mounts at the
+same path. The alias is `main` everywhere, so prompts and agent scenarios do not depend on the
+environment.
+
+[`sql-safe-mcp.example-qa-open.yaml`](../sql-safe-mcp.example-qa-open.yaml) is an open alias,
+`qa_open`, for exploring de-identified QA data. It has no copy of the strict policy and runs as a
+second server process with its own key. Keep it out of any environment where production data is
+reachable: it exposes every column except the free-text columns it denies.
+
+The working order is:
+
+1. Explore with `qa_open` to learn the schema and the columns the agent needs.
+2. Put those columns into `app_policy.exposed_columns` in the strict file, so that everything the
+   agent needs is listed before acceptance. Columns that are not listed stay protected.
+3. Accept the scenario against `main` in QA, using the strict policy.
+4. Run the same strict file in production. Only the environment changes: `MAIN_SQL_URL` and the
+   key file mounted at `/run/secrets/main_pii_key`.
+
+For a development host, register both servers. Each has its own `--config`, so the strict
+policy stays in one file. The key is not in the host file: the strict entry reads it from
+`/run/secrets/main_pii_key`, which the development host must provide as a file readable by the
+server user only:
+
+```json
+{
+  "mcpServers": {
+    "sql-safe-strict": {
+      "command": "uvx",
+      "args": ["sql-safe-mcp", "--config", "/path/to/sql-safe-mcp.example-strict.yaml"],
+      "env": {
+        "MAIN_SQL_URL": "mssql+pyodbc://..."
+      }
+    },
+    "sql-safe-qa-open": {
+      "command": "uvx",
+      "args": ["sql-safe-mcp", "--config", "/path/to/sql-safe-mcp.example-qa-open.yaml"],
+      "env": {
+        "QA_OPEN_SQL_URL": "mssql+pyodbc://...",
+        "QA_OPEN_PII_KEY": "..."
+      }
+    }
+  }
+}
+```
+
+Both servers expose tools with the same names. The agent tells them apart by the server name
+(`sql-safe-strict` or `sql-safe-qa-open`). In production the host lists only the strict entry.
+
+**Database login.** The policy protects only what the login can read. Grant `SELECT` only on the
+tables the policy lists, so the server cannot read tables that are not granted. Run these in
+each database the alias reads:
+
+```sql
+-- SQL Server: grant through a role; repeat for each database.
+CREATE ROLE sql_safe_read;
+GRANT SELECT ON OBJECT::dbo.Orders TO sql_safe_read;
+GRANT SELECT ON OBJECT::dbo.Customers TO sql_safe_read;
+ALTER ROLE sql_safe_read ADD MEMBER sql_safe_reader;
+```
+
+```sql
+-- MySQL / MariaDB: grant per table; replace the database and user names.
+CREATE USER 'sql_safe_reader'@'%' IDENTIFIED BY '<password>';
+GRANT SELECT ON app.Orders TO 'sql_safe_reader'@'%';
+GRANT SELECT ON app.Customers TO 'sql_safe_reader'@'%';
+```
 
 ## Locating and checking the file
 

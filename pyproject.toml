@@ -48,6 +48,8 @@ include = [
     "/sql-safe-mcp.example-simple.yaml",
     "/sql-safe-mcp.example-multi.yaml",
     "/sql-safe-mcp.example-shared.yaml",
+    "/sql-safe-mcp.example-strict.yaml",
+    "/sql-safe-mcp.example-qa-open.yaml",
     "/src",
 ]
 
@@ -62,7 +64,7 @@ markers = [
 
 [tool.mutmut]
 source_paths = ["src/sql_safe_mcp"]
-also_copy = ["server.json", "README.md", "docs", "tools", "scripts", "compose.sqlserver.yml", "compose.mysql.yml"]
+also_copy = ["server.json", "README.md", "docs", "tools", "scripts", "compose.sqlserver.yml", "compose.mysql.yml", "sql-safe-mcp.example-simple.yaml", "sql-safe-mcp.example-multi.yaml", "sql-safe-mcp.example-shared.yaml", "sql-safe-mcp.example-strict.yaml", "sql-safe-mcp.example-qa-open.yaml"]
 only_mutate = ["*security/*.py", "*config.py", "*diagnostics.py", "*service.py"]
 mutate_only_covered_lines = true
 pytest_add_cli_args = ["-q", "-m", "not integration and not deep", "-p", "no:cacheprovider"]
