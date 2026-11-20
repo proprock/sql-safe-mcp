@@ -7,6 +7,14 @@ categories `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 
 ## [Unreleased]
 
+### Security
+
+- A `pii_key` entry written directly in a server's YAML block is now rejected with `CONFIG_ERROR`
+  ("pii_key is not a configuration key; use pii_key_file or pii_key_env"). Before, such a key was
+  silently accepted on `metadata` aliases and silently overwritten on aliases that also set
+  `pii_key_env` or `pii_key_file`. Use `pii_key_env` or `pii_key_file`; configurations that use
+  them alone are unchanged.
+
 ## [2.0.0] - 2026-11-07
 
 ### Added
